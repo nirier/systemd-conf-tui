@@ -1,0 +1,11 @@
+{
+  "name": "my-app",
+  "description": "My application",
+  "exec_start": "/usr/bin/python3 /home/me/app/main.py",
+  "working_directory": "/home/me/app",
+  "type": "simple",
+  "restart": "on-failure",
+  "restart_sec": "3s",
+  "environment": "\"PORT=8080\" \"APP_ENV=production\"",
+  "memory_max": "512M"
+}

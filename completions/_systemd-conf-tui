@@ -1,0 +1,6 @@
+#compdef systemd-conf-tui
+_arguments \
+    '--help[显示帮助]' \
+    '--version[显示版本]' \
+    '--system[使用系统服务模式]' \
+    '--render[从 JSON 生成 unit]:JSON 文件:_files -g "*.json"'
