@@ -12,7 +12,6 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/nirier/systemd-conf-tui/internal/service"
@@ -58,6 +57,10 @@ type Model struct {
 	choice           int
 	notice           string
 	result           *installedMsg
+	editing, help    bool
+	previewFocused   bool
+	editOriginal     string
+	selection        int
 }
 
 type installedMsg struct {
@@ -65,20 +68,13 @@ type installedMsg struct {
 	err    error
 }
 
-var (
-	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
-	mutedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	activeStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("114"))
-	errorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-)
-
 func New(system bool) Model {
 	definitions := [][3]string{
 		{"服务名称", "例如 my-app；可省略 .service 后缀", ""},
 		{"服务描述（可选）", "简短说明这个服务的用途", ""},
 		{"启动命令 · ExecStart", "例如 /usr/bin/python3 /home/me/app.py；管道等语法需显式 /bin/sh -c '…'", ""},
 		{"工作目录（可选）", "例如 /home/me/project；请使用绝对路径，不会展开 ~", ""},
-		{"服务类型 · Type", "simple / exec / oneshot / forking / notify / dbus / idle", "simple"},
+		{"服务类型 · Type", "simple / exec / oneshot / forking / notify / notify-reload / dbus / idle", "simple"},
 		{"重启策略 · Restart", "on-failure / always / no / on-success / on-abnormal / on-watchdog / on-abort", "on-failure"},
 		{"重启间隔 · RestartSec", "例如 3s / 1min", "3s"},
 		{"环境变量（可选）", "systemd 语法，例如 \"PORT=8080\" \"APP_ENV=production\"；不要在 unit 中存放密钥", ""},
@@ -99,7 +95,7 @@ func New(system bool) Model {
 	for _, d := range definitions {
 		input := textinput.New()
 		input.CharLimit = 4096
-		input.Prompt = "  "
+		input.Prompt = "› "
 		input.Placeholder = d[1]
 		input.SetValue(d[2])
 		m.fields = append(m.fields, field{label: d[0], hint: d[1], input: input})
@@ -114,7 +110,7 @@ func New(system bool) Model {
 	return m
 }
 
-func (m Model) Init() tea.Cmd { return textinput.Blink }
+func (m Model) Init() tea.Cmd { return nil }
 
 func (m Model) pages() []string {
 	if m.advanced {
@@ -154,17 +150,23 @@ func (m Model) config() unit.Config {
 }
 
 func (m *Model) resize() {
-	w := max(12, m.width-8)
+	left, right, height := m.dimensions()
 	for i := range m.fields {
-		m.fields[i].input.Width = w - 4
+		m.fields[i].input.Width = max(1, left-8)
 	}
-	m.extra.SetWidth(w)
-	m.extra.SetHeight(max(3, m.height-12))
-	m.preview.Width = w
-	m.preview.Height = max(3, m.height-17)
+	m.extra.SetWidth(max(1, left-4))
+	m.extra.SetHeight(max(1, height-len(m.pages())-7))
+	m.preview.Width = max(1, right-4)
+	m.preview.Height = max(1, height-5)
+	if m.width < 96 && m.isPreview() {
+		m.preview.Height = max(1, height-7)
+	}
 	if m.result != nil {
-		m.preview.Height = max(3, m.height-6)
-		m.preview.SetContent(lipgloss.NewStyle().Width(w).Render(m.resultContent()))
+		m.preview.Width = max(1, m.width-6)
+		m.preview.Height = max(1, m.height-7)
+		m.preview.SetContent(ansi.Hardwrap(m.resultContent(), m.preview.Width, true))
+	} else {
+		m.refreshPreview()
 	}
 }
 
@@ -173,39 +175,146 @@ func (m *Model) focusCurrent() {
 		m.fields[i].input.Blur()
 	}
 	m.extra.Blur()
+	if !m.editing {
+		return
+	}
 	if m.isCustom() {
 		m.extra.Focus()
 	} else if fields := m.visibleFields(); len(fields) > 0 {
 		m.focus = min(m.focus, len(fields)-1)
-		m.fields[fields[m.focus]].input.Focus()
+		if len(fieldChoices(fields[m.focus])) == 0 {
+			m.fields[fields[m.focus]].input.Focus()
+		}
 	}
 }
 
-func (m *Model) setPreview() bool {
+func (m *Model) refreshPreview() {
 	content, err := m.config().Render(m.system)
 	if err != nil {
+		content = "配置尚未完成\n\n" + err.Error() + "\n\n填写服务名称和启动命令后，这里会显示完整 unit。"
+	}
+	m.preview.SetContent(ansi.Hardwrap(content, m.preview.Width, true))
+}
+
+func (m *Model) setPreview() bool {
+	m.refreshPreview()
+	if err := m.config().Validate(m.system); err != nil {
 		m.notice = err.Error()
 		return false
 	}
-	m.preview.SetContent(content)
 	m.preview.GotoTop()
 	return true
 }
 
-func (m *Model) next() {
-	if err := m.config().Validate(m.system); err != nil {
-		m.notice = err.Error()
+func (m *Model) goPage(page int) {
+	page = max(0, min(page, len(m.pages())-1))
+	if page == len(m.pages())-1 && !m.setPreview() {
 		return
 	}
-	if m.page < len(m.pages())-1 {
-		m.page++
-		m.focus = 0
-		m.notice = ""
-		if m.isPreview() {
-			m.setPreview()
-		}
-		m.focusCurrent()
+	m.page, m.focus, m.choice = page, 0, 0
+	m.previewFocused, m.notice = false, ""
+	m.focusCurrent()
+	m.resize()
+}
+
+func (m *Model) next() { m.goPage(m.page + 1) }
+
+func fieldChoices(index int) []string {
+	switch index {
+	case typeField:
+		return []string{"simple", "exec", "oneshot", "forking", "notify", "notify-reload", "dbus", "idle"}
+	case restartField:
+		return []string{"on-failure", "always", "no", "on-success", "on-abnormal", "on-watchdog", "on-abort"}
 	}
+	return nil
+}
+
+func (m *Model) beginEdit() tea.Cmd {
+	m.editing, m.notice = true, ""
+	if m.isCustom() {
+		m.editOriginal = m.extra.Value()
+	} else {
+		index := m.visibleFields()[m.focus]
+		m.editOriginal = m.fields[index].input.Value()
+		m.selection = 0
+		for i, value := range fieldChoices(index) {
+			if value == m.editOriginal {
+				m.selection = i
+			}
+		}
+	}
+	m.focusCurrent()
+	return textinput.Blink
+}
+
+func (m *Model) finishEdit(cancel bool) {
+	if m.isCustom() {
+		if cancel {
+			m.extra.SetValue(m.editOriginal)
+		}
+	} else {
+		index := m.visibleFields()[m.focus]
+		if cancel {
+			m.fields[index].input.SetValue(m.editOriginal)
+		} else if choices := fieldChoices(index); len(choices) > 0 {
+			m.fields[index].input.SetValue(choices[m.selection])
+		}
+	}
+	m.editing = false
+	m.focusCurrent()
+	m.refreshPreview()
+}
+
+func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "esc":
+			m.finishEdit(true)
+			return m, nil
+		case "ctrl+s":
+			m.finishEdit(false)
+			return m, nil
+		case "enter":
+			if !m.isCustom() {
+				m.finishEdit(false)
+				return m, nil
+			}
+		case "tab", "shift+tab":
+			if !m.isCustom() {
+				m.finishEdit(false)
+				delta := 1
+				if key.String() == "shift+tab" {
+					delta = -1
+				}
+				m.focus = (m.focus + delta + len(m.visibleFields())) % len(m.visibleFields())
+				return m, m.beginEdit()
+			}
+		}
+	}
+	var cmd tea.Cmd
+	if m.isCustom() {
+		m.extra, cmd = m.extra.Update(msg)
+	} else {
+		index := m.visibleFields()[m.focus]
+		if choices := fieldChoices(index); len(choices) > 0 {
+			if key, ok := msg.(tea.KeyMsg); ok {
+				switch key.String() {
+				case "j", "down":
+					m.selection = (m.selection + 1) % len(choices)
+				case "k", "up":
+					m.selection = (m.selection + len(choices) - 1) % len(choices)
+				case "g", "home":
+					m.selection = 0
+				case "G", "end":
+					m.selection = len(choices) - 1
+				}
+			}
+			return m, nil
+		}
+		m.fields[index].input, cmd = m.fields[index].input.Update(msg)
+	}
+	m.refreshPreview()
+	return m, cmd
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -232,50 +341,73 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				fresh := New(m.system)
 				fresh.width, fresh.height = m.width, m.height
 				fresh.resize()
-				return fresh, textinput.Blink
+				return fresh, fresh.Init()
 			case "b":
 				if !m.result.result.Written {
 					m.result = nil
 					m.resize()
 					m.setPreview()
 				}
+				return m, nil
 			}
-			if m.result != nil {
-				var cmd tea.Cmd
-				m.preview, cmd = m.preview.Update(msg)
-				return m, cmd
+			var cmd tea.Cmd
+			m.preview, cmd = m.preview.Update(msg)
+			return m, cmd
+		}
+		if m.help {
+			if key == "?" || key == "esc" || key == "q" || key == "enter" {
+				m.help = false
 			}
 			return m, nil
 		}
+		if m.editing {
+			return m.updateEditor(msg)
+		}
 		switch key {
+		case "q":
+			return m, tea.Quit
+		case "?":
+			m.help = true
+			return m, nil
 		case "f2":
 			m.system = !m.system
-			m.notice = "已切换模式；安装系统服务时才会请求 sudo 授权。"
+			m.notice = "已切换模式；仅安装系统服务时请求 sudo。"
+			m.refreshPreview()
 			if m.isPreview() && !m.setPreview() {
-				m.page, m.focus = 0, 0
-				m.focusCurrent()
+				m.page, m.focus, m.previewFocused = 0, 0, false
 			}
+			m.resize()
 			return m, nil
 		case "f3":
 			wasPreview := m.isPreview()
 			m.advanced = !m.advanced
-			m.focus, m.page = 0, 1
+			m.page = 1
 			if wasPreview {
 				m.page = len(m.pages()) - 1
-				m.setPreview()
 			} else if m.advanced {
 				m.page = 2
 			}
-			m.focusCurrent()
+			m.focus, m.choice, m.previewFocused = 0, 0, false
+			m.resize()
 			return m, nil
-		case "ctrl+n":
+		case "ctrl+n", "l", "right":
 			m.next()
-			return m, textinput.Blink
-		case "ctrl+p", "esc":
-			m.page = max(0, m.page-1)
-			m.focus, m.notice = 0, ""
-			m.focusCurrent()
-			return m, textinput.Blink
+			return m, nil
+		case "ctrl+p", "h", "left", "esc":
+			if key == "esc" && m.previewFocused {
+				m.previewFocused = false
+			} else {
+				m.goPage(m.page - 1)
+			}
+			return m, nil
+		case "1", "2", "3", "4", "5":
+			if page := int(key[0] - '1'); page < len(m.pages()) {
+				m.goPage(page)
+			}
+			return m, nil
+		case "tab", "shift+tab":
+			m.previewFocused = !m.previewFocused
+			return m, nil
 		}
 		if m.isPreview() {
 			switch key {
@@ -301,137 +433,60 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.notice = err.Error()
 				}
 				return m, nil
-			case "tab", "shift+tab":
-				m.choice = 1 - m.choice
+			case " ", "enter":
+				if !m.previewFocused {
+					if m.choice == 0 {
+						m.enable = !m.enable
+					} else {
+						m.start = !m.start
+					}
+				}
 				return m, nil
-			case " ":
-				if m.choice == 0 {
-					m.enable = !m.enable
+			}
+		}
+		if m.previewFocused || key == "pgup" || key == "pgdown" {
+			var cmd tea.Cmd
+			m.preview, cmd = m.preview.Update(msg)
+			return m, cmd
+		}
+		switch key {
+		case "enter", " ":
+			if !m.isPreview() {
+				return m, m.beginEdit()
+			}
+		case "j", "down", "k", "up", "g", "home", "G", "end":
+			count := len(m.visibleFields())
+			if m.isPreview() {
+				count = 2
+			}
+			if count > 0 {
+				position := m.focus
+				if m.isPreview() {
+					position = m.choice
+				}
+				switch key {
+				case "j", "down":
+					position = (position + 1) % count
+				case "k", "up":
+					position = (position + count - 1) % count
+				case "g", "home":
+					position = 0
+				case "G", "end":
+					position = count - 1
+				}
+				if m.isPreview() {
+					m.choice = position
 				} else {
-					m.start = !m.start
+					m.focus = position
 				}
-				return m, nil
-			}
-		} else if !m.isCustom() {
-			switch key {
-			case "enter":
-				m.next()
-				return m, textinput.Blink
-			case "tab", "down", "shift+tab", "up":
-				fields := m.visibleFields()
-				if len(fields) == 0 {
-					return m, nil
-				}
-				delta := 1
-				if key == "shift+tab" || key == "up" {
-					delta = -1
-				}
-				m.focus = (m.focus + delta + len(fields)) % len(fields)
-				m.focusCurrent()
-				return m, textinput.Blink
 			}
 		}
+		return m, nil
 	}
-	var cmd tea.Cmd
-	if m.isPreview() {
-		m.preview, cmd = m.preview.Update(msg)
-	} else if m.isCustom() {
-		m.extra, cmd = m.extra.Update(msg)
-	} else if fields := m.visibleFields(); len(fields) > 0 {
-		i := fields[m.focus]
-		m.fields[i].input, cmd = m.fields[i].input.Update(msg)
+	if m.editing {
+		return m.updateEditor(msg)
 	}
-	return m, cmd
-}
-
-func checkbox(on bool) string {
-	if on {
-		return "[✓]"
-	}
-	return "[ ]"
-}
-
-func (m Model) View() string {
-	if m.width < 48 || m.height < 20 {
-		return "请将终端调整为至少 48 列 × 20 行。\nCtrl+C 退出\n"
-	}
-	if m.result != nil {
-		return m.resultView()
-	}
-	var b strings.Builder
-	mode := "USER · 当前用户"
-	if m.system {
-		mode = "SYSTEM · sudo 系统服务"
-	}
-	b.WriteString(titleStyle.Render("SYSTEMD CONF") + "   " + activeStyle.Render(mode) + "\n")
-	pages := m.pages()
-	for i, page := range pages {
-		label := fmt.Sprintf("%d %s", i+1, page)
-		if i == m.page {
-			b.WriteString(activeStyle.Render(label))
-		} else {
-			b.WriteString(mutedStyle.Render(label))
-		}
-		b.WriteString("  ")
-	}
-	b.WriteString("\n\n")
-	if m.isPreview() {
-		dir, err := service.Directory(m.system)
-		if err != nil {
-			dir = err.Error()
-		}
-		b.WriteString("安装位置：" + filepath.Join(dir, m.config().Filename()) + "\n")
-		if m.system {
-			b.WriteString(mutedStyle.Render("系统服务默认以 root 运行；可在高级设置填写 User。") + "\n")
-		} else {
-			b.WriteString(mutedStyle.Render("自启作用于用户会话；退出登录后持续运行需另行启用 linger。") + "\n")
-		}
-		b.WriteString(m.preview.View() + "\n")
-		for i, item := range []string{checkbox(m.enable) + " 启用自启", checkbox(m.start) + " 立即启动"} {
-			if i == m.choice {
-				item = activeStyle.Render("› " + item)
-			} else {
-				item = "  " + item
-			}
-			b.WriteString(item + "   ")
-		}
-		b.WriteString("\n" + mutedStyle.Render("安装前使用 systemd-analyze 校验；已有服务不会覆盖。") + "\n")
-	} else if m.isCustom() {
-		b.WriteString("追加原生 systemd 指令，先写段名，再逐行填写 Key=Value。\n")
-		b.WriteString(mutedStyle.Render("支持 [Unit] / [Service] / [Install]，可使用重置指令；请在预览中核对。") + "\n")
-		b.WriteString(m.extra.View() + "\n")
-	} else {
-		fields := m.visibleFields()
-		count := min(len(fields), max(1, (m.height-11)/4))
-		first := max(0, m.focus-count+1)
-		last := min(len(fields), first+count)
-		for pos := first; pos < last; pos++ {
-			f := m.fields[fields[pos]]
-			label := f.label
-			if pos == m.focus {
-				label = activeStyle.Render("› " + label)
-			} else {
-				label = "  " + label
-			}
-			b.WriteString(label + "\n" + f.input.View() + "\n" + mutedStyle.Render(f.hint) + "\n\n")
-		}
-		b.WriteString(mutedStyle.Render(fmt.Sprintf("字段 %d/%d · Tab / ↑↓ 切换字段，Enter 下一步", m.focus+1, len(fields))) + "\n")
-	}
-	if m.notice != "" {
-		b.WriteString(errorStyle.Render(m.notice) + "\n")
-	}
-	keys := "Enter 继续 · Esc 返回 · ^C 退出\nTab/↑↓ 字段 · F2 模式 · F3 高级"
-	if m.isCustom() {
-		keys = "Ctrl+N 继续 · Esc 返回 · ^C 退出\nF2 模式 · F3 高级 · Enter 换行"
-	} else if m.isPreview() {
-		keys = "i 安装 · e 导出 · Esc 返回 · ^C 退出\nF2 模式 · Tab/空格 选项 · ↑↓ 滚动"
-	}
-	b.WriteString("\n" + mutedStyle.Render(keys))
-	return m.frame(b.String())
-}
-
-func (m Model) resultView() string {
-	return m.frame(m.preview.View() + "\n\n↑↓ 滚动 · n 新建 · q / Enter 退出\nb 返回修改（仅在尚未安装时）")
+	return m, nil
 }
 
 func (m Model) resultContent() string {
@@ -458,14 +513,6 @@ func (m Model) resultContent() string {
 		b.WriteString("\n用户服务默认随用户会话运行。需要注销后运行时，可自行执行：\n  loginctl enable-linger \"$USER\"\n")
 	}
 	return b.String()
-}
-
-func (m Model) frame(content string) string {
-	lines := strings.Split(content, "\n")
-	for i := range lines {
-		lines[i] = ansi.Truncate(lines[i], m.width-4, "…")
-	}
-	return lipgloss.NewStyle().Padding(1, 2).Render(strings.Join(lines, "\n"))
 }
 
 // Bubble Tea releases the terminal while this command runs, so sudo can use

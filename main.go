@@ -17,7 +17,7 @@ import (
 	"github.com/nirier/systemd-conf-tui/internal/unit"
 )
 
-var version = "0.1.0"
+var version = "0.2.0"
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
@@ -31,12 +31,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(flags.Output(), `systemd-conf-tui — 用几步创建 systemd 服务
 
 用法：
-  systemd-conf-tui                    打开用户服务创建向导
-  systemd-conf-tui --system           打开系统服务向导
+  systemd-conf-tui                    打开用户服务配置界面
+  systemd-conf-tui --system           打开系统服务配置界面
   systemd-conf-tui --render app.json  生成 unit 到标准输出，不修改系统
   systemd-conf-tui --system --render app.json
 
-界面按键：F2 切换用户/系统，F3 高级配置，Ctrl+C 退出。
+界面按键：j/k 移动，h/l 步骤，Enter 编辑，Tab 面板，? 帮助。
+F2 切换用户/系统，F3 高级配置，q 或 Ctrl+C 退出。
 系统安装时才调用 sudo；请以普通用户运行本程序。
 
 选项：`)
