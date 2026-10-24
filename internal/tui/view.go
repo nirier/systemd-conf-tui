@@ -50,6 +50,9 @@ func (m Model) View() string {
 	if m.width < 48 || m.height < 20 {
 		return "请将终端调整为至少 48 列 × 20 行。\nCtrl+C 退出\n"
 	}
+	if m.manager != nil {
+		return m.frame(m.manager.view())
+	}
 	if m.result != nil {
 		return m.resultView()
 	}
@@ -103,7 +106,7 @@ func (m Model) View() string {
 	} else if m.isPreview() {
 		keys = "j/k 选项  Space 切换  i 安装  e 导出"
 	}
-	footer := fmt.Sprintf("1–%d 步骤  F2 模式  F3 高级  ? 帮助  q 退出", len(m.pages()))
+	footer := fmt.Sprintf("1–%d 步骤  F2 模式  F3 高级  F4 管理  ? 帮助  q 退出", len(m.pages()))
 	if m.editing {
 		keys = "Enter 保存  Esc 取消  Tab 编辑下一项"
 		footer = "编辑时按键作为文字输入 · Ctrl+C 退出"
@@ -249,7 +252,7 @@ func (m Model) helpContent() string {
 			"编辑：Enter 保存 · Esc 取消 · Tab 下一项",
 			"多行：Enter 换行 · Ctrl+S 保存 · Esc 取消",
 			"编辑时 j/k/q 等均为文字；枚举项用 j/k 选择",
-			"F2 用户 / 系统模式 · F3 展开 / 收起高级",
+			"F2 用户 / 系统模式 · F3 高级 · F4 管理 unit",
 			"安装页：j/k 选项 · Space 切换 · i 安装",
 			"e 导出 · Tab 聚焦预览后 j/k 或翻页键滚动",
 			"? / Esc 关闭帮助 · q / Ctrl+C 退出",
@@ -264,7 +267,7 @@ func (m Model) helpContent() string {
 		"Enter      编辑当前字段          多行编辑时 Enter 换行",
 		"g/G        首项 / 末项           编辑时可正常输入 j/k/q 等字符",
 		"Ctrl+N/P   下一步 / 上一步",
-		"F2 用户 / 系统模式  ·  F3 展开 / 收起高级配置",
+		"F2 用户 / 系统模式  ·  F3 高级配置  ·  F4 管理 unit",
 		"预览安装：j/k 选项 · Space 切换 · i 安装 · e 导出",
 		"完整预览：Tab 聚焦 · j/k 滚动 · PgUp/PgDn 翻页",
 		"? / Esc 关闭帮助 · q / Ctrl+C 退出（编辑时 q 为文字）",
@@ -273,7 +276,7 @@ func (m Model) helpContent() string {
 
 func (m Model) resultView() string {
 	body := panel("操作结果", m.preview.View(), m.width-2, m.height-4, true)
-	return m.frame(body + "\n" + mutedStyle.Render("j/k 滚动 · n 新建 · q / Enter 退出") + "\n" +
+	return m.frame(body + "\n" + mutedStyle.Render("j/k 滚动 · n 新建 · F4 管理 · q / Enter 退出") + "\n" +
 		mutedStyle.Render("b 返回修改（仅在尚未安装时）"))
 }
 

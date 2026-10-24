@@ -40,6 +40,16 @@ func Default() Config {
 var namePattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
 var keyPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*$`)
 
+var managedNamePattern = regexp.MustCompile(`^(?:[A-Za-z0-9_:.-]|\\x[0-9A-Fa-f]{2}|@)+\.(?:service|socket|target|device|mount|automount|swap|timer|path|slice|scope)$`)
+
+// ValidateName accepts literal systemd unit names, never paths or patterns.
+func ValidateName(name string) error {
+	if len(name) > 255 || !managedNamePattern.MatchString(name) {
+		return fmt.Errorf("无效的 unit 名称: %q", name)
+	}
+	return nil
+}
+
 func (c Config) Filename() string {
 	return strings.TrimSuffix(c.Name, ".service") + ".service"
 }

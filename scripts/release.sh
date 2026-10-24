@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-version=${1:-0.2.0}
+version=${1:-0.3.0}
 case "$version" in
     ''|*[!0-9A-Za-z.+-]*)
         echo 'Invalid release version' >&2

@@ -47,6 +47,8 @@ type field struct {
 }
 
 type Model struct {
+	lastManaged      *managedMsg
+	manager          *managerModel
 	fields           []field
 	extra            textarea.Model
 	preview          viewport.Model
@@ -318,12 +320,36 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.manager != nil {
+		if result, ok := msg.(managedMsg); ok {
+			m.lastManaged = &result
+		}
+		if size, ok := msg.(tea.WindowSizeMsg); ok {
+			m.width, m.height = size.Width, size.Height
+			m.manager.width, m.manager.height = size.Width, size.Height
+			m.manager.resize()
+			return m, nil
+		}
+		if key, ok := msg.(tea.KeyMsg); ok && !m.manager.busy && !m.manager.filtering && (key.String() == "f4" || (key.String() == "esc" && m.manager.mode == "list")) {
+			m.system = m.manager.system
+			m.manager = nil
+			if m.isPreview() && !m.setPreview() {
+				m.page, m.focus, m.previewFocused = 0, 0, false
+			}
+			m.resize()
+			return m, nil
+		}
+		cmd := m.manager.update(msg)
+		return m, cmd
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.resize()
 		return m, nil
 	case installedMsg:
+		m.lastManaged = nil
 		m.result = &msg
 		m.resize()
 		m.preview.GotoTop()
@@ -335,6 +361,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.result != nil {
 			switch key {
+			case "f4":
+				m.manager = newManager(m.system, m.width, m.height)
+				return m, m.manager.load()
 			case "q", "esc", "enter":
 				return m, tea.Quit
 			case "n":
@@ -378,6 +407,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.resize()
 			return m, nil
+		case "f4":
+			m.manager = newManager(m.system, m.width, m.height)
+			return m, m.manager.load()
 		case "f3":
 			wasPreview := m.isPreview()
 			m.advanced = !m.advanced
@@ -530,21 +562,24 @@ func (p *installProcess) SetStdin(r io.Reader)  { p.stdin = r }
 func (p *installProcess) SetStdout(w io.Writer) { p.stdout = w }
 func (p *installProcess) SetStderr(w io.Writer) { p.stderr = w }
 
-func (p *installProcess) Run() error {
-	run := func(name string, args ...string) (string, error) {
-		fmt.Fprintf(p.stdout, "→ %s %s\n", name, strings.Join(args, " "))
+func terminalRunner(stdin io.Reader, stdout, stderr io.Writer) service.Run {
+	return func(name string, args ...string) (string, error) {
+		fmt.Fprintf(stdout, "→ %s %s\n", name, strings.Join(args, " "))
 		cmd := exec.Command(name, args...)
 		var out, errOut bytes.Buffer
-		cmd.Stdin = p.stdin
-		cmd.Stdout = io.MultiWriter(p.stdout, &out)
-		cmd.Stderr = io.MultiWriter(p.stderr, &errOut)
+		cmd.Stdin = stdin
+		cmd.Stdout = io.MultiWriter(stdout, &out)
+		cmd.Stderr = io.MultiWriter(stderr, &errOut)
 		if err := cmd.Run(); err != nil {
 			return out.String(), fmt.Errorf("%s: %w\n%s", name, err, strings.TrimSpace(errOut.String()))
 		}
 		return out.String(), nil
 	}
+}
+
+func (p *installProcess) Run() error {
 	var err error
-	p.result, err = service.Install(p.config, p.options, run)
+	p.result, err = service.Install(p.config, p.options, terminalRunner(p.stdin, p.stdout, p.stderr))
 	if err != nil {
 		fmt.Fprintln(p.stderr, err)
 	}
@@ -553,6 +588,14 @@ func (p *installProcess) Run() error {
 
 // Summary is printed after leaving the alternate screen.
 func (m Model) Summary() string {
+	if m.lastManaged != nil {
+		r := m.lastManaged
+		if r.err != nil {
+			return "操作未全部完成：" + r.err.Error() + "\n" + r.result.String()
+		}
+		return r.result.String()
+	}
+
 	if m.result == nil {
 		return ""
 	}
@@ -562,7 +605,12 @@ func (m Model) Summary() string {
 	return "已创建服务：" + m.result.result.Path
 }
 
-func (m Model) Failed() bool { return m.result != nil && m.result.err != nil }
+func (m Model) Failed() bool {
+	if m.lastManaged != nil {
+		return m.lastManaged.err != nil
+	}
+	return m.result != nil && m.result.err != nil
+}
 
 // Ensure terminal execution stays wired to Bubble Tea's lifecycle.
 var _ tea.ExecCommand = (*installProcess)(nil)

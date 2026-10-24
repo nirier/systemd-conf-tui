@@ -17,7 +17,7 @@ import (
 	"github.com/nirier/systemd-conf-tui/internal/unit"
 )
 
-var version = "0.2.0"
+var version = "0.3.0"
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
@@ -37,8 +37,8 @@ func run(args []string, stdout, stderr io.Writer) int {
   systemd-conf-tui --system --render app.json
 
 界面按键：j/k 移动，h/l 步骤，Enter 编辑，Tab 面板，? 帮助。
-F2 切换用户/系统，F3 高级配置，q 或 Ctrl+C 退出。
-系统安装时才调用 sudo；请以普通用户运行本程序。
+F2 切换用户/系统，F3 高级配置，F4 管理 unit，q 或 Ctrl+C 退出。
+系统安装或管理修改时才调用 sudo；请以普通用户运行本程序。
 
 选项：`)
 		flags.PrintDefaults()

@@ -1,6 +1,6 @@
 # systemd-conf-tui
 
-使用 **Go + Bubble Tea** 编写的中文终端界面，快速创建 systemd 服务。采用类似 lazygit / jjui 的分栏布局与键盘操作：左侧配置，右侧实时预览，按 `Enter` 才进入编辑。默认创建当前用户的 `--user` 服务，可在界面中按 **F2** 切换到需要 sudo 的系统服务模式。
+使用 **Go + Bubble Tea** 编写的中文终端界面，快速创建 systemd 服务，并管理当前用户或系统的所有类型 unit。采用类似 lazygit / jjui 的分栏布局与键盘操作：左侧配置，右侧实时预览，按 `Enter` 才进入编辑。默认创建当前用户的 `--user` 服务，可在界面中按 **F2** 切换到需要 sudo 的系统服务模式。
 
 ## 开始使用
 
@@ -10,14 +10,14 @@
 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS.txt
-tar -xzf systemd-conf-tui_0.2.0_linux_amd64.tar.gz
+tar -xzf systemd-conf-tui_0.3.0_linux_amd64.tar.gz
 ./systemd-conf-tui
 ```
 
 ARM64 设备使用 `linux_arm64` 安装包。也可以使用 Go **1.25+** 安装：
 
 ```sh
-go install github.com/nirier/systemd-conf-tui@v0.2.0
+go install github.com/nirier/systemd-conf-tui@v0.3.0
 systemd-conf-tui
 ```
 
@@ -33,7 +33,7 @@ make build
 go run .
 ```
 
-请以自己的普通账户运行程序。整个 TUI 不需要 sudo；系统安装时会将终端交还给 sudo 输入密码。
+请以自己的普通账户运行程序。整个 TUI 不需要 sudo；系统安装或管理修改时会将终端交还给 sudo 输入密码。
 
 ## 三步创建
 
@@ -61,6 +61,7 @@ go run .
 | `PgUp` / `PgDown` | 翻页滚动预览 |
 | `F2` | 切换用户服务 / 系统服务，保留已填写内容 |
 | `F3` | 打开或收起高级配置，保留配置值 |
+| `F4` | 打开 unit 管理；管理页返回创建流程 |
 | 安装页 `j/k` + `Space` / `Enter` | 选择并切换自启 / 立即启动选项，`Tab` 切到预览滚动 |
 | 安装页 `i` / `e` | 安装 / 导出 |
 | `?` | 查看快捷键帮助，`?` / `Esc` 关闭 |
@@ -85,6 +86,22 @@ loginctl enable-linger "$USER"
 ```
 
 程序不会自动修改 linger。用户服务只能依赖用户 manager 中的 unit；例如系统的 `network-online.target` 通常不适合作为用户服务的依赖。
+
+## 管理已有 unit
+
+按 **F4** 打开管理页，默认管理当前账号的 `systemctl --user` unit；按 **F2** 切换到系统 unit。列表合并已安装配置和已加载 unit，覆盖 service、timer、socket、path、target、mount、slice、scope 等类型，包括模板和临时 unit。`/` 按名称或描述筛选，`j/k` 选择，`Enter` 查看完整配置和 drop-in，`r` 刷新。
+
+- **d — disable**：取消自启；遵循 systemctl 的 `[Install]` 规则，包括 `Also=` 的关联链接。
+- **m — mask**：阻止后续启动。已有同名本地配置时，原生 systemctl 可能拒绝 mask；程序保留原文件，不强行覆盖。
+- **x — 删除配置**：检查依赖后删除当前模式本地配置目录中的 unit 及其专属 `.d/*.conf`。删除文件后执行 `daemon-reload`。
+
+修改前均显示完整预览，按 **y** 确认，`n` / `Esc` 取消。删除预览首先列出具体命令和带引号的完整路径：逐个 `rm --`、存在专属 drop-in 目录时的 `rmdir --`，以及 `systemctl daemon-reload`；系统模式包含 `sudo -v` 和 `sudo -n`。用户模式的文件操作由程序直接完成，预览标注对应的等效 Linux 命令。预览和长错误可用 `j/k`、`PgUp/PgDown` 滚动；窄终端用 `Tab` 切换列表和详情。`F4` 返回创建流程，`q` 退出。管理列表需要支持 `--output=json` 的 systemctl。
+
+`disable` 和 `mask` **不会停止运行中的 unit**。删除前须自行执行对应模式的 `systemctl stop UNIT` 并 disable。程序检查运行状态、待处理任务、已加载依赖、未加载配置的引用、模板、timer/socket/path 触发关系和共用配置；有依赖、配置需要 reload、查询失败或无法确认时拒绝删除。模板的变量和重置指令采用保守检查，可能需要手动整理引用后再删除；不会自动级联删除依赖项。
+
+用户模式仅删除 `$XDG_CONFIG_HOME/systemd/user`（默认 `~/.config/systemd/user`）中的本地配置；系统模式仅删除 `/etc/systemd/system` 中的本地配置。发行版、全局用户、运行时及生成配置请使用 disable / mask。共享 drop-in 保留；符号链接、别名、共用模板的实例、含非配置文件的 drop-in 目录，以及删除后会暴露其他路径同名定义的情况均受保护。本地 `/dev/null` mask 链接仅在没有下层同名定义且依赖检查通过时允许删除。
+
+系统查询使用普通权限。确认修改后释放终端进行 sudo 认证，随后再次核对配置与依赖；所有命令均以独立参数执行，不经过 shell。操作中断或 reload 失败时保留并逐项报告已完成的更改，不声称回滚成功。可按 `r` 刷新核对最终状态。
 
 ## 高级配置
 
@@ -137,14 +154,14 @@ make build
 打包 Linux amd64 / arm64 发布文件并生成 SHA256 校验文件：
 
 ```sh
-make release VERSION=0.2.0
+make release VERSION=0.3.0
 ```
 
 ```text
 main.go                参数、JSON 生成入口和终端检测
 internal/unit/         unit 配置、校验和生成
-internal/service/      安装、原子写入和 systemctl 操作
+internal/service/      安装、unit 查询、依赖检查、安全删除和 systemctl 操作
 internal/tui/          Bubble Tea 模型、分栏视图、编辑器和 sudo 终端交接
 ```
 
-测试使用临时目录和模拟命令，覆盖配置校验、键盘导航、编辑保存与取消、模式切换、终端尺寸适配、快速流程、文件保护及部分安装失败；不会安装或启动真实服务。目前提供新建与导出，不包含已有服务的编辑、删除或状态管理。
+测试使用临时目录和模拟命令，覆盖配置校验、键盘导航、编辑保存与取消、模式切换、终端尺寸适配、快速流程、文件保护及部分安装失败；不会安装或启动真实服务。管理测试还覆盖用户 / 系统权限、模板与触发依赖、删除前复检、符号链接及共享配置保护、删除后的部分失败；所有修改使用临时目录和模拟命令，不修改真实 unit。暂不提供已有 unit 的编辑。
