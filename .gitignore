@@ -1,5 +1,28 @@
+# Build output and compiled binaries
 /bin/
+/build/
 /dist/
-/coverage.out
+/systemd-conf-tui
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.a
+*.o
+
+# Test binaries, coverage reports, and profiling output
+*.test
+*.out
+*.coverprofile
+*.prof
+/coverage/
+
+# Local Go workspace and debugger output
+/go.work
+/go.work.sum
+__debug_bin*
+
+# Generated systemd units
 *.service
 !examples/*.service
