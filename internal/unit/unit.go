@@ -56,9 +56,8 @@ func (c Config) Filename() string {
 }
 
 func (c Config) Validate(system bool) error {
-	name := strings.TrimSuffix(c.Name, ".service")
-	if !namePattern.MatchString(name) || len(c.Filename()) > 255 {
-		return i18n.Errorf("服务名只能包含英文字母、数字、_、-、.，且不能以 . 或 - 开头")
+	if err := validateServiceName(c.Name); err != nil {
+		return err
 	}
 	if strings.TrimSpace(c.ExecStart) == "" {
 		return i18n.Errorf("请输入启动命令，例如 /usr/bin/python3 /home/me/app.py")

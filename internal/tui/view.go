@@ -2,13 +2,10 @@ package tui
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-
-	"github.com/nirier/systemd-conf-tui/internal/service"
 )
 
 var (
@@ -89,21 +86,30 @@ func (m Model) View() string {
 			body = settings
 		}
 	}
-	status := m.tr("浏览 · Enter 编辑 · l 下一步 · Tab 查看预览")
+	status := m.tr("浏览 · Enter 编辑 · i 直达预览 · Ctrl+O 导入")
+	if m.width < 96 {
+		status = m.tr("名称和命令 · i 预览 · Ctrl+O 导入")
+	}
 	if m.editing {
 		status = m.tr("编辑 · Enter 保存 · Esc 取消 · Tab 保存并编辑下一项")
-		if m.isCustom() {
+		if m.isCustom() || (m.importer != nil && m.focus == 3) {
 			status = m.tr("编辑自定义指令 · Ctrl+S 保存 · Esc 取消")
 		}
 	} else if m.isPreview() {
 		status = m.tr("安装前请核对完整预览 · 已有文件不会覆盖")
+	}
+	if m.importer != nil && !m.editing && !m.isPreview() {
+		status = m.tr("原文导入 · 不追加默认指令 · 默认仅安装")
 	}
 	if m.notice != "" {
 		status = errorStyle.Render(m.notice)
 	} else {
 		status = mutedStyle.Render(status)
 	}
-	keys := m.tr("j/k 移动  h/l 步骤  Enter 编辑  Tab 面板")
+	keys := m.tr("j/k 移动  Enter 编辑  i 预览  Ctrl+O 导入")
+	if m.importer != nil && !m.isPreview() {
+		keys = m.tr("j/k 选择  Enter 编辑  r 读取  i 预览  Esc 返回")
+	}
 	if m.previewFocused {
 		keys = m.tr("j/k 滚动  PgUp/PgDn 翻页  Tab 返回配置")
 	} else if m.isPreview() {
@@ -113,12 +119,15 @@ func (m Model) View() string {
 	if m.width < 96 {
 		footer = m.tr("F2 模式 F3 高级 F4 管理 F5 设置 ? 帮助 q 退出")
 	}
+	if m.importer != nil {
+		footer = m.tr("F2 模式 F4 管理 F5 设置 ? 帮助 q 退出")
+	}
 	if m.editing {
 		keys = m.tr("Enter 保存  Esc 取消  Tab 编辑下一项")
 		footer = m.tr("编辑时按键作为文字输入 · Ctrl+C 退出")
-		if m.isCustom() {
+		if m.isCustom() || (m.importer != nil && m.focus == 3) {
 			keys = m.tr("Enter 换行  Ctrl+S 保存  Esc 取消")
-		} else if len(fieldChoices(m.visibleFields()[m.focus])) > 0 {
+		} else if m.importer == nil && len(fieldChoices(m.visibleFields()[m.focus])) > 0 {
 			keys = m.tr("j/k 选择  Enter 确认  Esc 取消")
 			footer = m.tr("确认后返回浏览 · Ctrl+C 退出")
 		}
@@ -139,6 +148,8 @@ func (m Model) fieldsView(width, height int) string {
 	available := height - 3
 	var content string
 	switch {
+	case m.importer != nil && !m.isPreview():
+		return m.importFieldsView(width, height)
 	case m.isPreview():
 		items := []string{checkbox(m.enable) + m.tr(" 启用自启"), checkbox(m.start) + m.tr(" 立即启动")}
 		for i, item := range items {
@@ -152,7 +163,7 @@ func (m Model) fieldsView(width, height int) string {
 		if available > 3 {
 			content += "\n\n" + titleStyle.Render(m.tr("i 安装服务    e 仅导出"))
 		}
-		if available > 6 {
+		if available > 6 && m.importer == nil {
 			note := m.tr("自启随用户会话；注销后运行需启用 linger。")
 			if m.system {
 				note = m.tr("默认以 root 运行；高级设置可指定 User。")
@@ -221,13 +232,8 @@ func (m Model) fieldsView(width, height int) string {
 }
 
 func (m Model) previewView(width, height int) string {
-	dir, err := service.Directory(m.system)
-	path := filepath.Join(dir, m.config().Filename())
-	if err != nil {
-		path = err.Error()
-	}
 	title := fmt.Sprintf(m.tr("完整预览 · %d%%"), int(m.preview.ScrollPercent()*100))
-	content := mutedStyle.Render(ansi.Truncate(path, width-4, "…")) + "\n" + m.preview.View()
+	content := m.preview.View()
 	if m.width < 96 && m.isPreview() {
 		for i, item := range []string{checkbox(m.enable) + m.tr(" 启用自启"), checkbox(m.start) + m.tr(" 立即启动")} {
 			if i == m.choice && !m.previewFocused {
@@ -260,6 +266,7 @@ func (m Model) helpContent() string {
 			m.tr("编辑时 j/k/q 等均为文字；枚举项用 j/k 选择"),
 			m.tr("F2 用户 / 系统模式 · F3 高级 · F4 管理 unit"),
 			m.tr("F5 设置 · 浏览时切换语言"),
+			m.tr("i 直达预览 · Ctrl+O 文件 / 原文导入"),
 			m.tr("安装页：j/k 选项 · Space 切换 · i 安装"),
 			m.tr("e 导出 · Tab 聚焦预览后 j/k 或翻页键滚动"),
 			m.tr("? / Esc 关闭帮助 · q / Ctrl+C 退出"),
@@ -274,6 +281,7 @@ func (m Model) helpContent() string {
 		m.tr("Enter      编辑当前字段          多行编辑时 Enter 换行"),
 		m.tr("g/G        首项 / 末项           编辑时可正常输入 j/k/q 等字符"),
 		m.tr("Ctrl+N/P   下一步 / 上一步"),
+		m.tr("i 直达预览 · Ctrl+O 文件 / 原文导入"),
 		m.tr("F2 用户 / 系统模式  ·  F3 高级配置  ·  F4 管理 unit  ·  F5 设置"),
 		m.tr("预览安装：j/k 选项 · Space 切换 · i 安装 · e 导出"),
 		m.tr("完整预览：Tab 聚焦 · j/k 滚动 · PgUp/PgDn 翻页"),

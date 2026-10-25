@@ -177,9 +177,9 @@ func TestBrowseEditAndCancel(t *testing.T) {
 	m = press(m, tea.KeyEnter)
 	m = typeKeys(m, "demo")
 	m = press(m, tea.KeyTab)
-	m = typeKeys(m, "示例服务")
-	m = press(m, tea.KeyTab)
 	m = typeKeys(m, "/usr/bin/true")
+	m = press(m, tea.KeyTab)
+	m = typeKeys(m, "示例服务")
 	m = press(m, tea.KeyEnter)
 	if m.editing || m.config().Name != "demo" || m.config().Description != "示例服务" {
 		t.Fatal("tab should commit and edit the next field")

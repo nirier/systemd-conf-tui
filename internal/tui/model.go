@@ -55,6 +55,7 @@ type Model struct {
 	settingsNotice   string
 	lastManaged      *managedMsg
 	manager          *managerModel
+	importer         *importModel
 	fields           []field
 	extra            textarea.Model
 	preview          viewport.Model
@@ -125,6 +126,9 @@ func New(system bool) Model {
 func (m Model) Init() tea.Cmd { return nil }
 
 func (m Model) pages() []string {
+	if m.importer != nil {
+		return []string{m.tr("导入服务"), m.tr("预览安装")}
+	}
 	if m.advanced {
 		return []string{m.tr("基本信息"), m.tr("运行设置"), m.tr("高级设置"), m.tr("自定义指令"), m.tr("预览安装")}
 	}
@@ -132,12 +136,15 @@ func (m Model) pages() []string {
 }
 
 func (m Model) isPreview() bool { return m.page == len(m.pages())-1 }
-func (m Model) isCustom() bool  { return m.advanced && m.page == 3 }
+func (m Model) isCustom() bool  { return m.importer == nil && m.advanced && m.page == 3 }
 
 func (m Model) visibleFields() []int {
+	if m.importer != nil {
+		return nil
+	}
 	switch m.page {
 	case 0:
-		return []int{nameField, descriptionField, execField}
+		return []int{nameField, execField, descriptionField}
 	case 1:
 		return []int{workingField, typeField, restartField, restartSecField, environmentField}
 	case 2:
@@ -161,17 +168,35 @@ func (m Model) config() unit.Config {
 	}
 }
 
+func (m Model) document() (unit.Document, error) {
+	if m.importer != nil {
+		d := unit.Document{Name: m.importer.name.Value(), Content: m.importer.content}
+		return d, d.Validate()
+	}
+	return m.config().Document(m.system)
+}
+
+func (m Model) filename() string {
+	if m.importer != nil {
+		return (unit.Document{Name: m.importer.name.Value()}).Filename()
+	}
+	return m.config().Filename()
+}
+
 func (m *Model) resize() {
 	left, right, height := m.dimensions()
+	if m.importer != nil {
+		m.importer.resize(left, height-len(m.pages())-3)
+	}
 	for i := range m.fields {
 		m.fields[i].input.Width = max(1, left-8)
 	}
 	m.extra.SetWidth(max(1, left-4))
 	m.extra.SetHeight(max(1, height-len(m.pages())-7))
 	m.preview.Width = max(1, right-4)
-	m.preview.Height = max(1, height-5)
+	m.preview.Height = max(1, height-4)
 	if m.width < 96 && m.isPreview() {
-		m.preview.Height = max(1, height-7)
+		m.preview.Height = max(1, height-6)
 	}
 	if m.result != nil {
 		m.preview.Width = max(1, m.width-6)
@@ -201,17 +226,46 @@ func (m *Model) focusCurrent() {
 }
 
 func (m *Model) refreshPreview() {
-	content, err := m.config().Render(m.system)
+	document, err := m.document()
+	content := document.Content
 	if err != nil {
-		content = m.tr("配置尚未完成\n\n") + m.language.Error(err) + m.tr("\n\n填写服务名称和启动命令后，这里会显示完整 unit。")
+		content = m.tr("配置尚未完成\n\n") + m.language.Error(err)
+		if m.importer != nil {
+			content += "\n\n" + m.tr("填写服务名称并读取文件或粘贴完整原文。")
+		} else {
+			content += m.tr("\n\n填写服务名称和启动命令后，这里会显示完整 unit。")
+		}
 	}
-	m.preview.SetContent(ansi.Hardwrap(content, m.preview.Width, true))
+	dir, pathErr := service.Directory(m.system)
+	path := filepath.Join(dir, m.filename())
+	if pathErr != nil {
+		path = m.language.Error(pathErr)
+	}
+	m.preview.SetContent(ansi.Hardwrap(path+"\n\n"+content, m.preview.Width, true))
+}
+
+func (m *Model) scrollPreview(msg tea.Msg) tea.Cmd {
+	if key, ok := msg.(tea.KeyMsg); ok {
+		switch key.String() {
+		case "g", "home":
+			m.preview.GotoTop()
+			return nil
+		case "G", "end":
+			m.preview.GotoBottom()
+			return nil
+		}
+	}
+	var cmd tea.Cmd
+	m.preview, cmd = m.preview.Update(msg)
+	return cmd
 }
 
 func (m *Model) setPreview() bool {
 	m.refreshPreview()
-	if err := m.config().Validate(m.system); err != nil {
+	if _, err := m.document(); err != nil {
+		m.locateInvalidField()
 		m.notice = m.language.Error(err)
+		m.resize()
 		return false
 	}
 	m.preview.GotoTop()
@@ -343,7 +397,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.settingsOpen {
 			return m.updateSettings(key)
 		}
-		canOpen := !m.editing && !m.help
+		canOpen := !m.editing && !m.help && (m.importer == nil || !m.importer.loading)
 		if m.manager != nil {
 			canOpen = !m.manager.busy && !m.manager.filtering && m.manager.mode == "list"
 		}
@@ -376,6 +430,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	if loaded, ok := msg.(importLoadedMsg); ok {
+		if m.importer != nil && m.importer == loaded.owner {
+			m.importer.loading = false
+			if loaded.err != nil {
+				m.notice = m.language.Error(loaded.err)
+			} else {
+				m.importer.content = loaded.document.Content
+				if m.importer.name.Value() == "" {
+					m.importer.name.SetValue(loaded.document.Name)
+				}
+				m.importer.body.SetValue(loaded.document.Content)
+				m.notice = ""
+				m.refreshPreview()
+			}
+		}
+		return m, nil
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -412,9 +483,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			var cmd tea.Cmd
-			m.preview, cmd = m.preview.Update(msg)
+			cmd := m.scrollPreview(msg)
 			return m, cmd
+		}
+		if m.importer != nil && m.importer.loading {
+			return m, nil
 		}
 		if m.help {
 			if key == "?" || key == "esc" || key == "q" || key == "enter" {
@@ -423,9 +496,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.editing {
+			if m.importer != nil {
+				return m.updateImport(msg)
+			}
 			return m.updateEditor(msg)
 		}
+		if m.importer != nil && !m.isPreview() {
+			switch key {
+			case "f2", "f4", "?", "i", "1", "2", "ctrl+n", "ctrl+p", "h", "l", "left", "right":
+			default:
+				return m.updateImport(msg)
+			}
+		}
+
 		switch key {
+		case "ctrl+o":
+			if m.importer == nil {
+				m.openImport()
+			}
+			return m, nil
+		case "i":
+			if !m.isPreview() {
+				m.goPage(len(m.pages()) - 1)
+				return m, nil
+			}
 		case "q":
 			return m, tea.Quit
 		case "?":
@@ -444,6 +538,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.manager = m.newManager()
 			return m, m.manager.load()
 		case "f3":
+			if m.importer != nil {
+				return m, nil
+			}
 			wasPreview := m.isPreview()
 			m.advanced = !m.advanced
 			m.page = 1
@@ -480,13 +577,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !m.setPreview() {
 					return m, nil
 				}
-				op := &installProcess{language: m.language, config: m.config(), options: service.Options{System: m.system, Enable: m.enable, Start: m.start}}
+				document, _ := m.document()
+				op := &installProcess{language: m.language, document: document, options: service.Options{System: m.system, Enable: m.enable, Start: m.start}}
 				return m, tea.Exec(op, func(err error) tea.Msg { return installedMsg{result: op.result, err: err} })
 			case "e":
-				content, err := m.config().Render(m.system)
+				document, err := m.document()
+				content := document.Content
 				if err == nil {
 					var path string
-					path, err = filepath.Abs(m.config().Filename())
+					path, err = filepath.Abs(m.filename())
 					if err == nil {
 						err = service.WriteNew(path, []byte(content))
 					}
@@ -510,8 +609,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if m.previewFocused || key == "pgup" || key == "pgdown" {
-			var cmd tea.Cmd
-			m.preview, cmd = m.preview.Update(msg)
+			cmd := m.scrollPreview(msg)
 			return m, cmd
 		}
 		switch key {
@@ -549,6 +647,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.editing {
+		if m.importer != nil {
+			return m.updateImport(msg)
+		}
 		return m.updateEditor(msg)
 	}
 	return m, nil
@@ -572,7 +673,7 @@ func (m Model) resultContent() string {
 	if m.system {
 		ctl, logs = "sudo systemctl", "sudo journalctl"
 	}
-	name := m.config().Filename()
+	name := m.filename()
 	b.WriteString("\n" + ctl + " status " + name + "\n" + logs + " -u " + name + " -f\n")
 	if !m.system {
 		b.WriteString(m.tr("\n用户服务默认随用户会话运行。需要注销后运行时，可自行执行：\n  loginctl enable-linger \"$USER\"\n"))
@@ -584,7 +685,7 @@ func (m Model) resultContent() string {
 // the real terminal without reading passwords into the application.
 type installProcess struct {
 	language i18n.Language
-	config   unit.Config
+	document unit.Document
 	options  service.Options
 	result   service.Result
 	stdin    io.Reader
@@ -613,7 +714,7 @@ func terminalRunner(stdin io.Reader, stdout, stderr io.Writer) service.Run {
 
 func (p *installProcess) Run() error {
 	var err error
-	p.result, err = service.Install(p.config, p.options, terminalRunner(p.stdin, p.stdout, p.stderr))
+	p.result, err = service.InstallDocument(p.document, p.options, terminalRunner(p.stdin, p.stdout, p.stderr))
 	if err != nil {
 		fmt.Fprintln(p.stderr, p.language.Error(err))
 	}

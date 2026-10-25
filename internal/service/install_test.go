@@ -110,7 +110,7 @@ func TestSystemInstallUsesSudoAndLiteralArgs(t *testing.T) {
 	var calls [][]string
 	run := func(name string, args ...string) (string, error) {
 		calls = append(calls, append([]string{name}, args...))
-		if name == "sudo" && args[0] == "mktemp" {
+		if name == "sudo" && len(args) > 1 && args[1] == "mktemp" {
 			return "/etc/systemd/system/.systemd-conf-tui-test\n", nil
 		}
 		return "", nil
@@ -124,8 +124,8 @@ func TestSystemInstallUsesSudoAndLiteralArgs(t *testing.T) {
 			if call[0] != "systemd-analyze" || call[1] != "verify" {
 				t.Fatal(call)
 			}
-		} else if call[0] != "sudo" {
-			t.Fatal("unprivileged system operation", call)
+		} else if call[0] != "sudo" || (i == 1 && call[1] != "-v") || (i > 1 && call[1] != "-n") {
+			t.Fatal("unexpected privilege operation", call)
 		}
 		for _, arg := range call {
 			if strings.Contains(arg, "touch") {
@@ -133,7 +133,7 @@ func TestSystemInstallUsesSudoAndLiteralArgs(t *testing.T) {
 			}
 		}
 	}
-	if calls[3][1] != "ln" || calls[3][2] != "-T" || calls[len(calls)-1][1] != "rm" {
+	if calls[4][2] != "ln" || calls[4][3] != "-T" || calls[len(calls)-1][2] != "rm" {
 		t.Fatal(calls)
 	}
 }
@@ -145,7 +145,10 @@ func TestSystemCollisionStopsAndCleansStage(t *testing.T) {
 	run := func(name string, args ...string) (string, error) {
 		calls = append(calls, append([]string{name}, args...))
 		if name == "sudo" {
-			switch args[0] {
+			if args[0] == "-v" {
+				return "", nil
+			}
+			switch args[1] {
 			case "mktemp":
 				return "/etc/systemd/system/.systemd-conf-tui-test\n", nil
 			case "ln":
@@ -155,11 +158,11 @@ func TestSystemCollisionStopsAndCleansStage(t *testing.T) {
 		return "", nil
 	}
 	r, err := Install(c, Options{System: true}, run)
-	if err == nil || r.Written || calls[len(calls)-1][1] != "rm" {
+	if err == nil || r.Written || calls[len(calls)-1][2] != "rm" {
 		t.Fatalf("%+v %v %v", r, err, calls)
 	}
 	for _, call := range calls {
-		if len(call) > 1 && call[1] == "systemctl" {
+		if len(call) > 2 && call[2] == "systemctl" {
 			t.Fatal("systemctl must not run after collision", calls)
 		}
 	}

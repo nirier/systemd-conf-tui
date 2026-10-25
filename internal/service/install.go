@@ -1,9 +1,11 @@
 package service
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/nirier/systemd-conf-tui/internal/i18n"
 	"github.com/nirier/systemd-conf-tui/internal/unit"
@@ -65,15 +67,23 @@ func WriteNew(path string, data []byte) error {
 }
 
 func Install(c unit.Config, opts Options, run Run) (result Result, err error) {
-	content, err := c.Render(opts.System)
+	document, err := c.Document(opts.System)
 	if err != nil {
 		return result, err
 	}
+	return InstallDocument(document, opts, run)
+}
+
+func InstallDocument(document unit.Document, opts Options, run Run) (result Result, err error) {
+	if err = document.Validate(); err != nil {
+		return result, err
+	}
+	content := document.Content
 	dir, err := Directory(opts.System)
 	if err != nil {
 		return result, err
 	}
-	result.Path = filepath.Join(dir, c.Filename())
+	result.Path = filepath.Join(dir, document.Filename())
 	if _, statErr := os.Lstat(result.Path); statErr == nil {
 		return result, i18n.Errorf("%s 已存在；请更换服务名，已有服务不会覆盖", result.Path)
 	} else if !os.IsNotExist(statErr) {
@@ -84,7 +94,7 @@ func Install(c unit.Config, opts Options, run Run) (result Result, err error) {
 		return result, err
 	}
 	defer os.RemoveAll(tmp)
-	source := filepath.Join(tmp, c.Filename())
+	source := filepath.Join(tmp, document.Filename())
 	if err = os.WriteFile(source, []byte(content), 0600); err != nil {
 		return result, err
 	}
@@ -96,9 +106,12 @@ func Install(c unit.Config, opts Options, run Run) (result Result, err error) {
 		return result, i18n.Errorf("unit 校验失败，尚未安装: %w", err)
 	}
 	if opts.System {
+		if _, err = run("sudo", "-v"); err != nil {
+			return result, err
+		}
 		// Stage as root on the target filesystem, then link without replacement.
 		var staged string
-		staged, err = run("sudo", "mktemp", filepath.Join(dir, ".systemd-conf-tui-XXXXXXXX"))
+		staged, err = run("sudo", "-n", "mktemp", filepath.Join(dir, ".systemd-conf-tui-XXXXXXXX"))
 		if err != nil {
 			return result, err
 		}
@@ -107,14 +120,14 @@ func Install(c unit.Config, opts Options, run Run) (result Result, err error) {
 			return result, i18n.Errorf("sudo mktemp 返回了非预期路径")
 		}
 		defer func() {
-			if _, cleanupErr := run("sudo", "rm", "-f", "--", staged); cleanupErr != nil && err == nil {
+			if _, cleanupErr := run("sudo", "-n", "rm", "-f", "--", staged); cleanupErr != nil && err == nil {
 				err = i18n.Errorf("服务操作完成，但临时文件 %s 清理失败: %w", staged, cleanupErr)
 			}
 		}()
-		if _, err = run("sudo", "install", "-m", "0644", "--", source, staged); err != nil {
+		if _, err = run("sudo", "-n", "install", "-m", "0644", "--", source, staged); err != nil {
 			return result, err
 		}
-		if _, err = run("sudo", "ln", "-T", "--", staged, result.Path); err != nil {
+		if _, err = run("sudo", "-n", "ln", "-T", "--", staged, result.Path); err != nil {
 			return result, i18n.Errorf("安装失败（已有文件不会覆盖）: %w", err)
 		}
 	} else {
@@ -128,15 +141,15 @@ func Install(c unit.Config, opts Options, run Run) (result Result, err error) {
 	result.Written = true
 	actions := [][]string{{"daemon-reload"}}
 	if opts.Enable {
-		actions = append(actions, []string{"enable", c.Filename()})
+		actions = append(actions, []string{"enable", document.Filename()})
 	}
 	if opts.Start {
-		actions = append(actions, []string{"start", c.Filename()})
+		actions = append(actions, []string{"start", document.Filename()})
 	}
 	for _, args := range actions {
 		name := "systemctl"
 		if opts.System {
-			name, args = "sudo", append([]string{"systemctl"}, args...)
+			name, args = "sudo", append([]string{"-n", "systemctl"}, args...)
 		} else {
 			args = append([]string{"--user"}, args...)
 		}
@@ -145,4 +158,35 @@ func Install(c unit.Config, opts Options, run Run) (result Result, err error) {
 		}
 	}
 	return result, nil
+}
+
+// ReadDocument bounds reads and opens nonblocking so a FIFO cannot stall the UI.
+func ReadDocument(path string) (unit.Document, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return unit.Document{}, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return unit.Document{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return unit.Document{}, i18n.Errorf("只能读取普通 .service 文件")
+	}
+	if filepath.Ext(path) != ".service" {
+		return unit.Document{}, i18n.Errorf("只能读取普通 .service 文件")
+	}
+	data, err := io.ReadAll(io.LimitReader(f, unit.MaxDocumentSize+1))
+	if err != nil {
+		return unit.Document{}, err
+	}
+	document := unit.Document{Name: filepath.Base(path), Content: string(data)}
+	// The destination name is editable, so validate content with a temporary name.
+	check := document
+	check.Name = "imported"
+	if err := check.Validate(); err != nil {
+		return unit.Document{}, err
+	}
+	return document, nil
 }
