@@ -10,8 +10,32 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nirier/systemd-conf-tui/internal/i18n"
 	"github.com/nirier/systemd-conf-tui/internal/unit"
 )
+
+func TestEnglishManagementPreviewRecheckAndPartialResult(t *testing.T) {
+	f := newManagementFixture(t)
+	// Unit contents and descriptions are literal data even when they match UI text.
+	f.content["demo.service"] = "[Unit]\nDescription=服务名称\n[Service]\nExecStart=/usr/bin/true\n"
+	plan, err := PrepareManagementInLanguage("demo.service", Delete, false, f.run, i18n.English)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Command preview", "Action: delete", "Description=服务名称", filepath.Join(f.dir, "demo.service")} {
+		if !strings.Contains(plan.Preview, want) {
+			t.Fatal("preview lost translated message or literal unit data", plan.Preview)
+		}
+	}
+	f.fail = "daemon-reload"
+	result, err := ExecuteManagement(plan, f.run) // Temporary files and mocked commands only.
+	if err == nil || len(result.Removed) != 1 || !strings.Contains(i18n.English.Error(err), "Configuration deleted, but daemon-reload failed") {
+		t.Fatal("localized recheck or partial result failed", result, err)
+	}
+	if !strings.Contains(result.LocalizedString(i18n.English), "Removed: ") {
+		t.Fatal("removed files missing from English result")
+	}
+}
 
 type managementFixture struct {
 	t         *testing.T

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/nirier/systemd-conf-tui/internal/i18n"
 	"github.com/nirier/systemd-conf-tui/internal/unit"
 )
 
@@ -38,21 +39,21 @@ func managerctl(run Run, system bool, args ...string) (string, error) {
 func ListUnits(system bool, run Run) ([]Unit, error) {
 	files, err := managerctl(run, system, "list-unit-files", "--all", "--output=json")
 	if err != nil {
-		return nil, fmt.Errorf("读取 unit 文件失败: %w", err)
+		return nil, i18n.Errorf("读取 unit 文件失败: %w", err)
 	}
 	var installed []struct {
 		Name  string `json:"unit_file"`
 		State string `json:"state"`
 	}
 	if err := json.Unmarshal([]byte(files), &installed); err != nil {
-		return nil, fmt.Errorf("无法解析 unit 文件列表: %w", err)
+		return nil, i18n.Errorf("无法解析 unit 文件列表: %w", err)
 	}
 	if installed == nil {
-		return nil, fmt.Errorf("unit 文件列表不是 JSON 数组")
+		return nil, i18n.Errorf("unit 文件列表不是 JSON 数组")
 	}
 	loaded, err := managerctl(run, system, "list-units", "--all", "--output=json")
 	if err != nil {
-		return nil, fmt.Errorf("读取已加载 unit 失败: %w", err)
+		return nil, i18n.Errorf("读取已加载 unit 失败: %w", err)
 	}
 	var running []struct {
 		Name        string `json:"unit"`
@@ -60,10 +61,10 @@ func ListUnits(system bool, run Run) ([]Unit, error) {
 		Description string `json:"description"`
 	}
 	if err := json.Unmarshal([]byte(loaded), &running); err != nil {
-		return nil, fmt.Errorf("无法解析已加载 unit 列表: %w", err)
+		return nil, i18n.Errorf("无法解析已加载 unit 列表: %w", err)
 	}
 	if running == nil {
-		return nil, fmt.Errorf("已加载 unit 列表不是 JSON 数组")
+		return nil, i18n.Errorf("已加载 unit 列表不是 JSON 数组")
 	}
 	byName := map[string]Unit{}
 	for _, f := range installed {
@@ -99,7 +100,7 @@ func showUnits(system bool, run Run, names []string) ([]map[string]string, error
 	args := []string{"show", "--property=" + properties, "--"}
 	out, err := managerctl(run, system, append(args, names...)...)
 	if err != nil {
-		return nil, fmt.Errorf("读取 unit 依赖失败: %w", err)
+		return nil, i18n.Errorf("读取 unit 依赖失败: %w", err)
 	}
 	var result []map[string]string
 	for _, block := range strings.Split(strings.TrimSpace(out), "\n\n") {
@@ -107,17 +108,17 @@ func showUnits(system bool, run Run, names []string) ([]map[string]string, error
 		for _, line := range strings.Split(block, "\n") {
 			key, value, ok := strings.Cut(line, "=")
 			if !ok {
-				return nil, fmt.Errorf("无法解析 unit 属性")
+				return nil, i18n.Errorf("无法解析 unit 属性")
 			}
 			p[key] = value
 		}
 		if p["Id"] == "" {
-			return nil, fmt.Errorf("unit 属性缺少 Id，已拒绝操作")
+			return nil, i18n.Errorf("unit 属性缺少 Id，已拒绝操作")
 		}
 		result = append(result, p)
 	}
 	if len(result) != len(names) {
-		return nil, fmt.Errorf("unit 属性不完整，已拒绝操作")
+		return nil, i18n.Errorf("unit 属性不完整，已拒绝操作")
 	}
 	return result, nil
 }
@@ -144,7 +145,7 @@ func inspectTemplate(name string, system bool, run Run) (inspection, error) {
 		}
 	}
 	if state == "" {
-		return inspection{}, fmt.Errorf("模板 unit 未找到")
+		return inspection{}, i18n.Errorf("模板 unit 未找到")
 	}
 	content, err := managerctl(run, system, "cat", "--", name)
 	if err != nil {
@@ -158,7 +159,7 @@ func inspectTemplate(name string, system bool, run Run) (inspection, error) {
 		}
 	}
 	if path == "" {
-		return inspection{}, fmt.Errorf("无法确定模板配置路径")
+		return inspection{}, i18n.Errorf("无法确定模板配置路径")
 	}
 	return inspection{map[string]string{"Id": name, "Names": name, "LoadState": "loaded", "ActiveState": "inactive", "UnitFileState": state, "FragmentPath": path, "NeedDaemonReload": "no"}, content}, nil
 }
@@ -171,10 +172,10 @@ func checkShadowed(name, dir string, system bool, run Run) error {
 	}
 	out, err := run("systemd-analyze", args...)
 	if err != nil {
-		return fmt.Errorf("无法检查 unit 搜索路径: %w", err)
+		return i18n.Errorf("无法检查 unit 搜索路径: %w", err)
 	}
 	if strings.TrimSpace(out) == "" {
-		return fmt.Errorf("unit 搜索路径为空，已拒绝删除")
+		return i18n.Errorf("unit 搜索路径为空，已拒绝删除")
 	}
 	candidateNames := []string{name}
 	if !unit.IsTemplate(name) && strings.Contains(name, "@") {
@@ -184,7 +185,7 @@ func checkShadowed(name, dir string, system bool, run Run) error {
 	foundCurrent := false
 	for _, search := range strings.Split(strings.TrimSpace(out), "\n") {
 		if !filepath.IsAbs(search) {
-			return fmt.Errorf("unit 搜索路径不是绝对路径")
+			return i18n.Errorf("unit 搜索路径不是绝对路径")
 		}
 		local := filepath.Clean(search) == filepath.Clean(dir)
 		if local {
@@ -196,19 +197,19 @@ func checkShadowed(name, dir string, system bool, run Run) error {
 			}
 			candidate := filepath.Join(search, candidateName)
 			if _, err := os.Lstat(candidate); err == nil {
-				return fmt.Errorf("删除会暴露或影响其他配置 %s，请使用 disable / mask", candidate)
+				return i18n.Errorf("删除会暴露或影响其他配置 %s，请使用 disable / mask", candidate)
 			} else if !os.IsNotExist(err) {
 				return err
 			}
 		}
 	}
 	if !foundCurrent {
-		return fmt.Errorf("本地配置目录不在 unit 搜索路径中，已拒绝删除")
+		return i18n.Errorf("本地配置目录不在 unit 搜索路径中，已拒绝删除")
 	}
 	return nil
 }
 
-func inspect(name string, system bool, run Run) (inspection, error) {
+func inspect(name string, system bool, run Run, language i18n.Language) (inspection, error) {
 	if err := unit.ValidateName(name); err != nil {
 		return inspection{}, err
 	}
@@ -221,24 +222,28 @@ func inspect(name string, system bool, run Run) (inspection, error) {
 	}
 	p := ps[0]
 	if p["LoadState"] != "loaded" && p["LoadState"] != "masked" {
-		return inspection{}, fmt.Errorf("unit 未找到或加载失败")
+		return inspection{}, i18n.Errorf("unit 未找到或加载失败")
 	}
 	var content string
 	if p["FragmentPath"] == "" && p["LoadState"] == "loaded" {
-		content = "# 此 unit 没有持久配置文件（临时 unit 或设备等）；文件操作可能不适用。"
+		content = language.Text("# 此 unit 没有持久配置文件（临时 unit 或设备等）；文件操作可能不适用。")
 	} else if p["LoadState"] == "masked" {
-		content = "# 此 unit 已 mask；配置可能被 /dev/null 链接遮蔽。"
+		content = language.Text("# 此 unit 已 mask；配置可能被 /dev/null 链接遮蔽。")
 	} else {
 		content, err = managerctl(run, system, "cat", "--", name)
 		if err != nil {
-			return inspection{}, fmt.Errorf("无法读取完整配置: %w", err)
+			return inspection{}, i18n.Errorf("无法读取完整配置: %w", err)
 		}
 	}
 	return inspection{p, content}, nil
 }
 
 func PreviewUnit(name string, system bool, run Run) (string, error) {
-	in, err := inspect(name, system, run)
+	return PreviewUnitInLanguage(name, system, run, i18n.Chinese)
+}
+
+func PreviewUnitInLanguage(name string, system bool, run Run, language i18n.Language) (string, error) {
+	in, err := inspect(name, system, run, language)
 	if err != nil {
 		return "", err
 	}
@@ -246,11 +251,12 @@ func PreviewUnit(name string, system bool, run Run) (string, error) {
 }
 
 type ManagementPlan struct {
-	Name    string
-	Action  Action
-	System  bool
-	Preview string
-	Paths   []string
+	Name     string
+	Action   Action
+	System   bool
+	Preview  string
+	language i18n.Language
+	Paths    []string
 	// File identities and contents are rechecked immediately before unlinking.
 	files     []plannedFile
 	dropInDir bool
@@ -268,13 +274,22 @@ type ManagementResult struct {
 	Removed   []string
 }
 
-func (r ManagementResult) String() string {
+func (r ManagementResult) String() string { return r.LocalizedString(i18n.Chinese) }
+
+func (r ManagementResult) LocalizedString(language i18n.Language) string {
 	if len(r.Completed) == 0 && len(r.Removed) == 0 {
-		return "尚未确认任何更改已完成。"
+		return language.Text("尚未确认任何更改已完成。")
 	}
-	text := strings.Join(r.Completed, "\n")
+	completed := make([]string, len(r.Completed))
+	for i, item := range r.Completed {
+		completed[i] = language.Text(item)
+		if action, name, ok := strings.Cut(item, " 已完成："); ok {
+			completed[i] = action + language.Text(" 已完成：") + name
+		}
+	}
+	text := strings.Join(completed, "\n")
 	for _, p := range r.Removed {
-		text += "\n已删除：" + p
+		text += language.Text("\n已删除：") + p
 	}
 	return strings.TrimSpace(text)
 }
@@ -282,42 +297,46 @@ func (r ManagementResult) String() string {
 // PrepareManagement is read-only. Delete is limited to local configuration;
 // packaged/global units remain available for disable and mask.
 func PrepareManagement(name string, action Action, system bool, run Run) (ManagementPlan, error) {
-	plan := ManagementPlan{Name: name, Action: action, System: system}
+	return PrepareManagementInLanguage(name, action, system, run, i18n.Chinese)
+}
+
+func PrepareManagementInLanguage(name string, action Action, system bool, run Run, language i18n.Language) (ManagementPlan, error) {
+	plan := ManagementPlan{Name: name, Action: action, System: system, language: language}
 	if action != Disable && action != Mask && action != Delete {
-		return plan, fmt.Errorf("不支持的操作")
+		return plan, i18n.Errorf("不支持的操作")
 	}
-	in, err := inspect(name, system, run)
+	in, err := inspect(name, system, run, language)
 	if err != nil {
 		return plan, err
 	}
 	p := in.properties
-	mode := "用户"
+	mode := language.Text("用户")
 	if system {
-		mode = "系统"
+		mode = language.Text("系统")
 	}
-	plan.Preview = fmt.Sprintf(mode+" unit：%s\n操作：%s\n状态：%s / %s\n配置：%s\n\n%s", name, action, p["ActiveState"], p["UnitFileState"], p["FragmentPath"], in.content)
+	plan.Preview = fmt.Sprintf(language.Text("%s unit：%s\n操作：%s\n状态：%s / %s\n配置：%s\n\n%s"), mode, name, action, p["ActiveState"], p["UnitFileState"], p["FragmentPath"], in.content)
 	if action != Delete {
-		plan.Preview += "\n\n此操作不会停止正在运行的 unit。"
+		plan.Preview += language.Text("\n\n此操作不会停止正在运行的 unit。")
 		if action == Disable {
-			plan.Preview += "\ndisable 会按 [Install] 清理关联的启用链接（包括 Also=）。"
+			plan.Preview += language.Text("\ndisable 会按 [Install] 清理关联的启用链接（包括 Also=）。")
 		}
 		if action == Mask {
-			plan.Preview += "\nmask 会阻止后续启动；已有同名本地配置时 systemctl 可能拒绝操作。"
+			plan.Preview += language.Text("\nmask 会阻止后续启动；已有同名本地配置时 systemctl 可能拒绝操作。")
 		}
 		return plan, nil
 	}
 	if p["Job"] != "" && p["Job"] != "0" {
-		return plan, fmt.Errorf("unit 有待处理任务，请稍后重试")
+		return plan, i18n.Errorf("unit 有待处理任务，请稍后重试")
 	}
 	if p["ActiveState"] != "inactive" && p["ActiveState"] != "failed" {
-		return plan, fmt.Errorf("请先停止 %s（当前 %s），不会自动停止依赖", name, p["ActiveState"])
+		return plan, i18n.Errorf("请先停止 %s（当前 %s），不会自动停止依赖", name, p["ActiveState"])
 	}
 	switch p["UnitFileState"] {
 	case "disabled", "static", "indirect", "masked", "masked-runtime":
 	default:
-		return plan, fmt.Errorf("请先 disable %s（当前 %s）；不会自动删除启用链接", name, p["UnitFileState"])
+		return plan, i18n.Errorf("请先 disable %s（当前 %s）；不会自动删除启用链接", name, p["UnitFileState"])
 	}
-	if err := checkReferences(name, p, system, run); err != nil {
+	if err := checkReferences(name, p, system, run, language); err != nil {
 		return plan, err
 	}
 	dir, err := Directory(system)
@@ -333,12 +352,12 @@ func PrepareManagement(name string, action Action, system bool, run Run) (Manage
 	}
 	defer root.Close()
 	if p["SourcePath"] != "" {
-		return plan, fmt.Errorf("生成的 unit 不允许直接删除，请修改其来源：%s", p["SourcePath"])
+		return plan, i18n.Errorf("生成的 unit 不允许直接删除，请修改其来源：%s", p["SourcePath"])
 	}
 	path := filepath.Join(dir, name)
 	// A mask's FragmentPath is /dev/null, but only its local link may be removed.
 	if p["FragmentPath"] != path && p["LoadState"] != "masked" {
-		return plan, fmt.Errorf("仅可删除当前模式的本地配置目录中的同名 unit；共享配置、别名和实例请使用 disable / mask")
+		return plan, i18n.Errorf("仅可删除当前模式的本地配置目录中的同名 unit；共享配置、别名和实例请使用 disable / mask")
 	}
 	addFile := func(relative string, mask bool) error {
 		info, err := root.Lstat(relative)
@@ -352,15 +371,15 @@ func PrepareManagement(name string, action Action, system bool, run Run) (Manage
 				return err
 			}
 			if !mask || target != "/dev/null" {
-				return fmt.Errorf("拒绝删除符号链接：%s", relative)
+				return i18n.Errorf("拒绝删除符号链接：%s", relative)
 			}
 			f.link = target
 		} else {
 			if mask {
-				return fmt.Errorf("unit 被其他路径 mask，无法完整预览本地配置；请先 unmask 后重试")
+				return i18n.Errorf("unit 被其他路径 mask，无法完整预览本地配置；请先 unmask 后重试")
 			}
 			if !info.Mode().IsRegular() {
-				return fmt.Errorf("拒绝删除非普通文件：%s", relative)
+				return i18n.Errorf("拒绝删除非普通文件：%s", relative)
 			}
 			data, err := root.ReadFile(relative)
 			if err != nil {
@@ -378,7 +397,7 @@ func PrepareManagement(name string, action Action, system bool, run Run) (Manage
 	dropDir := name + ".d"
 	if info, err := root.Lstat(dropDir); err == nil {
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return plan, fmt.Errorf("drop-in 目录不可为符号链接")
+			return plan, i18n.Errorf("drop-in 目录不可为符号链接")
 		}
 		plan.dropInDir = true
 		f, err := root.Open(dropDir)
@@ -393,7 +412,7 @@ func PrepareManagement(name string, action Action, system bool, run Run) (Manage
 		sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 		for _, entry := range entries {
 			if !strings.HasSuffix(entry.Name(), ".conf") {
-				return plan, fmt.Errorf("drop-in 目录存在非配置文件 %s，请先手动整理", entry.Name())
+				return plan, i18n.Errorf("drop-in 目录存在非配置文件 %s，请先手动整理", entry.Name())
 			}
 			if err = addFile(filepath.Join(dropDir, entry.Name()), false); err != nil {
 				return plan, err
@@ -403,7 +422,7 @@ func PrepareManagement(name string, action Action, system bool, run Run) (Manage
 		return plan, err
 	}
 	// Shared/type-wide drop-ins are previewed but never removed.
-	plan.Preview += "\n\n依赖检查通过。将删除以下本地配置（包括该 unit 专属 drop-in）：\n" + strings.Join(plan.Paths, "\n") + "\n不会删除依赖项或其他 unit。共享 drop-in 会保留。"
+	plan.Preview += language.Text("\n\n依赖检查通过。将删除以下本地配置（包括该 unit 专属 drop-in）：\n") + strings.Join(plan.Paths, "\n") + language.Text("\n不会删除依赖项或其他 unit。共享 drop-in 会保留。")
 	if p["LoadState"] == "masked" {
 		for _, file := range plan.files {
 			if file.link == "" {
@@ -416,18 +435,19 @@ func PrepareManagement(name string, action Action, system bool, run Run) (Manage
 }
 
 func (plan ManagementPlan) deletionCommandPreview(dir string) string {
+	language := plan.language
 	// These quotes are for display only; execution always uses literal arguments.
 	quote := func(path string) string {
 		return "'" + strings.ReplaceAll(path, "'", "'\\''") + "'"
 	}
 	var b strings.Builder
-	b.WriteString("命令预览（省略只读检查命令）：\n")
+	b.WriteString(language.Text("命令预览（省略只读检查命令）：\n"))
 	prefix := ""
 	if plan.System {
 		b.WriteString("sudo -v\n")
 		prefix = "sudo -n "
 	}
-	b.WriteString("# 配置与依赖复检通过后：\n")
+	b.WriteString(language.Text("# 配置与依赖复检通过后：\n"))
 	for _, path := range plan.Paths {
 		fmt.Fprintf(&b, "%srm -- %s\n", prefix, quote(path))
 	}
@@ -440,12 +460,12 @@ func (plan ManagementPlan) deletionCommandPreview(dir string) string {
 	}
 	b.WriteString(" daemon-reload")
 	if !plan.System {
-		b.WriteString("\n用户模式的 rm / rmdir 为等效命令，文件操作由程序直接完成。")
+		b.WriteString(language.Text("\n用户模式的 rm / rmdir 为等效命令，文件操作由程序直接完成。"))
 	}
 	return b.String()
 }
 
-func checkReferences(name string, target map[string]string, system bool, run Run) error {
+func checkReferences(name string, target map[string]string, system bool, run Run, language i18n.Language) error {
 	units, err := ListUnits(system, run)
 	if err != nil {
 		return err
@@ -453,7 +473,7 @@ func checkReferences(name string, target map[string]string, system bool, run Run
 	names := strings.Fields(target["Names"])
 	names = append(names, name)
 	if target["NeedDaemonReload"] != "no" {
-		return fmt.Errorf("配置尚未加载，请先执行 %s daemon-reload", controlLabel(system))
+		return i18n.Errorf("配置尚未加载，请先执行 %s daemon-reload", controlLabel(system))
 	}
 	referenced := func(value string) bool {
 		for _, v := range strings.Fields(value) {
@@ -482,10 +502,10 @@ func checkReferences(name string, target map[string]string, system bool, run Run
 			if u.Name != name && u.State != "" && !strings.HasPrefix(u.State, "masked") {
 				content, err := managerctl(run, system, "cat", "--", u.Name)
 				if err != nil {
-					return fmt.Errorf("无法检查 unit 配置 %s: %w", u.Name, err)
+					return i18n.Errorf("无法检查 unit 配置 %s: %w", u.Name, err)
 				}
 				if unit.References(content, names) || unit.ImplicitReferences(u.Name, names) {
-					blockers = append(blockers, u.Name+" (配置引用)")
+					blockers = append(blockers, u.Name+language.Text(" (配置引用)"))
 				}
 			}
 			if unit.IsTemplate(u.Name) {
@@ -502,21 +522,21 @@ func checkReferences(name string, target map[string]string, system bool, run Run
 		}
 		for i, p := range ps {
 			if p["NeedDaemonReload"] != "no" {
-				return fmt.Errorf("%s 配置可能尚未加载，请先执行 %s daemon-reload 后重试", p["Id"], controlLabel(system))
+				return i18n.Errorf("%s 配置可能尚未加载，请先执行 %s daemon-reload 后重试", p["Id"], controlLabel(system))
 			}
 			if p["Id"] == target["Id"] {
 				if batch[i] != name {
-					blockers = append(blockers, batch[i]+" (别名共用配置)")
+					blockers = append(blockers, batch[i]+language.Text(" (别名共用配置)"))
 				} else if p["ActiveState"] != "inactive" && p["ActiveState"] != "failed" || p["UnitFileState"] != target["UnitFileState"] || p["Job"] != target["Job"] {
-					return fmt.Errorf("检查期间 unit 状态已变化，请刷新后重试")
+					return i18n.Errorf("检查期间 unit 状态已变化，请刷新后重试")
 				}
 				continue
 			}
 			if p["LoadState"] != "loaded" && p["LoadState"] != "masked" && p["LoadState"] != "not-found" {
-				return fmt.Errorf("%s 加载失败，无法确认依赖", p["Id"])
+				return i18n.Errorf("%s 加载失败，无法确认依赖", p["Id"])
 			}
 			if target["FragmentPath"] != "" && target["FragmentPath"] != "/dev/null" && p["FragmentPath"] == target["FragmentPath"] {
-				blockers = append(blockers, p["Id"]+" (共用配置)")
+				blockers = append(blockers, p["Id"]+language.Text(" (共用配置)"))
 			}
 			for _, key := range []string{"Requires", "Requisite", "Wants", "BindsTo", "Upholds", "PartOf", "OnFailure", "OnSuccess", "Triggers", "PropagatesStopTo", "PropagatesReloadTo", "JoinsNamespaceOf"} {
 				if referenced(p[key]) {
@@ -527,7 +547,7 @@ func checkReferences(name string, target map[string]string, system bool, run Run
 	}
 	if len(blockers) > 0 {
 		sort.Strings(blockers)
-		return fmt.Errorf("仍有 unit 依赖或触发此 unit，请先处理这些引用：\n%s", strings.Join(blockers, "\n"))
+		return i18n.Errorf("仍有 unit 依赖或触发此 unit，请先处理这些引用：\n%s", strings.Join(blockers, "\n"))
 	}
 	return nil
 }
@@ -545,16 +565,16 @@ func ExecuteManagement(plan ManagementPlan, run Run) (result ManagementResult, e
 	system := plan.System
 
 	// Rebuild the plan after confirmation to detect dependency/configuration changes.
-	fresh, err := PrepareManagement(plan.Name, plan.Action, system, run)
+	fresh, err := PrepareManagementInLanguage(plan.Name, plan.Action, system, run, plan.language)
 	if err != nil {
 		return result, err
 	}
 	if fresh.Preview != plan.Preview || !sameFiles(plan.files, fresh.files) {
-		return result, fmt.Errorf("配置或状态已变化，请重新预览并确认")
+		return result, i18n.Errorf("配置或状态已变化，请重新预览并确认")
 	}
 	if plan.Action != Delete {
 		if _, err = mutateManager(run, system, string(plan.Action), "--", plan.Name); err != nil {
-			return result, fmt.Errorf("%s 未确认完成，可能已有部分链接发生变化；请刷新检查：%w", plan.Action, err)
+			return result, i18n.Errorf("%s 未确认完成，可能已有部分链接发生变化；请刷新检查：%w", plan.Action, err)
 		}
 		result.Completed = append(result.Completed, string(plan.Action)+" 已完成："+plan.Name)
 		return result, nil
@@ -576,7 +596,7 @@ func deleteConfiguration(plan ManagementPlan, dir string, run Run) (result Manag
 	for _, f := range plan.files {
 		info, e := root.Lstat(f.relative)
 		if e != nil || !os.SameFile(info, f.info) {
-			return result, fmt.Errorf("文件已变化，已停止删除：%s", f.relative)
+			return result, i18n.Errorf("文件已变化，已停止删除：%s", f.relative)
 		}
 		if system {
 			_, err = run("sudo", "-n", "rm", "--", filepath.Join(dir, f.relative))
@@ -584,7 +604,7 @@ func deleteConfiguration(plan ManagementPlan, dir string, run Run) (result Manag
 			err = root.Remove(f.relative)
 		}
 		if err != nil {
-			return result, fmt.Errorf("删除 %s 失败：%w", f.relative, err)
+			return result, i18n.Errorf("删除 %s 失败：%w", f.relative, err)
 		}
 		result.Removed = append(result.Removed, filepath.Join(dir, f.relative))
 	}
@@ -599,10 +619,10 @@ func deleteConfiguration(plan ManagementPlan, dir string, run Run) (result Manag
 		err = statErr
 	}
 	if err != nil {
-		return result, fmt.Errorf("unit 文件已删除，但 drop-in 目录清理失败：%w；请执行 %s daemon-reload", err, controlLabel(system))
+		return result, i18n.Errorf("unit 文件已删除，但 drop-in 目录清理失败：%w；请执行 %s daemon-reload", err, controlLabel(system))
 	}
 	if _, err = mutateManager(run, system, "daemon-reload"); err != nil {
-		return result, fmt.Errorf("配置已删除，但 daemon-reload 失败，请手动重试：%w", err)
+		return result, i18n.Errorf("配置已删除，但 daemon-reload 失败，请手动重试：%w", err)
 	}
 	result.Completed = append(result.Completed, "daemon-reload 已完成")
 	return result, nil

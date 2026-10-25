@@ -14,6 +14,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/nirier/systemd-conf-tui/internal/config"
+	"github.com/nirier/systemd-conf-tui/internal/i18n"
 	"github.com/nirier/systemd-conf-tui/internal/service"
 	"github.com/nirier/systemd-conf-tui/internal/unit"
 )
@@ -47,6 +49,10 @@ type field struct {
 }
 
 type Model struct {
+	language         i18n.Language
+	settingsOpen     bool
+	settingsLanguage i18n.Language
+	settingsNotice   string
 	lastManaged      *managedMsg
 	manager          *managerModel
 	fields           []field
@@ -93,12 +99,13 @@ func New(system bool) Model {
 		{"CPU 配额 · CPUQuota", "例如 50% / 200%", ""},
 		{"安装目标 · WantedBy", "留空自动使用用户 default.target / 系统 multi-user.target", ""},
 	}
-	m := Model{system: system, enable: true, start: true, width: 88, height: 28}
+	settings, settingsErr := config.Load()
+	m := Model{language: settings.Language, system: system, enable: true, start: true, width: 88, height: 28}
 	for _, d := range definitions {
 		input := textinput.New()
 		input.CharLimit = 4096
 		input.Prompt = "› "
-		input.Placeholder = d[1]
+		input.Placeholder = m.tr(d[1])
 		input.SetValue(d[2])
 		m.fields = append(m.fields, field{label: d[0], hint: d[1], input: input})
 	}
@@ -109,6 +116,9 @@ func New(system bool) Model {
 	m.preview = viewport.New(80, 12)
 	m.resize()
 	m.focusCurrent()
+	if settingsErr != nil {
+		m.notice = m.tr("读取设置失败：") + m.language.Error(settingsErr)
+	}
 	return m
 }
 
@@ -116,9 +126,9 @@ func (m Model) Init() tea.Cmd { return nil }
 
 func (m Model) pages() []string {
 	if m.advanced {
-		return []string{"基本信息", "运行设置", "高级设置", "自定义指令", "预览安装"}
+		return []string{m.tr("基本信息"), m.tr("运行设置"), m.tr("高级设置"), m.tr("自定义指令"), m.tr("预览安装")}
 	}
-	return []string{"基本信息", "运行设置", "预览安装"}
+	return []string{m.tr("基本信息"), m.tr("运行设置"), m.tr("预览安装")}
 }
 
 func (m Model) isPreview() bool { return m.page == len(m.pages())-1 }
@@ -193,7 +203,7 @@ func (m *Model) focusCurrent() {
 func (m *Model) refreshPreview() {
 	content, err := m.config().Render(m.system)
 	if err != nil {
-		content = "配置尚未完成\n\n" + err.Error() + "\n\n填写服务名称和启动命令后，这里会显示完整 unit。"
+		content = m.tr("配置尚未完成\n\n") + m.language.Error(err) + m.tr("\n\n填写服务名称和启动命令后，这里会显示完整 unit。")
 	}
 	m.preview.SetContent(ansi.Hardwrap(content, m.preview.Width, true))
 }
@@ -201,7 +211,7 @@ func (m *Model) refreshPreview() {
 func (m *Model) setPreview() bool {
 	m.refreshPreview()
 	if err := m.config().Validate(m.system); err != nil {
-		m.notice = err.Error()
+		m.notice = m.language.Error(err)
 		return false
 	}
 	m.preview.GotoTop()
@@ -320,6 +330,29 @@ func (m Model) updateEditor(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if size, ok := msg.(tea.WindowSizeMsg); ok && m.settingsOpen {
+		m.width, m.height = size.Width, size.Height
+		m.resize()
+		if m.manager != nil {
+			m.manager.width, m.manager.height = size.Width, size.Height
+			m.manager.resize()
+		}
+		return m, nil
+	}
+	if key, ok := msg.(tea.KeyMsg); ok {
+		if m.settingsOpen {
+			return m.updateSettings(key)
+		}
+		canOpen := !m.editing && !m.help
+		if m.manager != nil {
+			canOpen = !m.manager.busy && !m.manager.filtering && m.manager.mode == "list"
+		}
+		if key.String() == "f5" && canOpen {
+			m.settingsOpen, m.settingsLanguage, m.settingsNotice = true, m.language, ""
+			return m, nil
+		}
+	}
+
 	if m.manager != nil {
 		if result, ok := msg.(managedMsg); ok {
 			m.lastManaged = &result
@@ -362,14 +395,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.result != nil {
 			switch key {
 			case "f4":
-				m.manager = newManager(m.system, m.width, m.height)
+				m.manager = m.newManager()
 				return m, m.manager.load()
 			case "q", "esc", "enter":
 				return m, tea.Quit
 			case "n":
 				fresh := New(m.system)
 				fresh.width, fresh.height = m.width, m.height
-				fresh.resize()
+				fresh.setLanguage(m.language)
 				return fresh, fresh.Init()
 			case "b":
 				if !m.result.result.Written {
@@ -400,7 +433,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "f2":
 			m.system = !m.system
-			m.notice = "已切换模式；仅安装系统服务时请求 sudo。"
+			m.notice = m.tr("已切换模式；仅安装系统服务时请求 sudo。")
 			m.refreshPreview()
 			if m.isPreview() && !m.setPreview() {
 				m.page, m.focus, m.previewFocused = 0, 0, false
@@ -408,7 +441,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.resize()
 			return m, nil
 		case "f4":
-			m.manager = newManager(m.system, m.width, m.height)
+			m.manager = m.newManager()
 			return m, m.manager.load()
 		case "f3":
 			wasPreview := m.isPreview()
@@ -447,7 +480,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !m.setPreview() {
 					return m, nil
 				}
-				op := &installProcess{config: m.config(), options: service.Options{System: m.system, Enable: m.enable, Start: m.start}}
+				op := &installProcess{language: m.language, config: m.config(), options: service.Options{System: m.system, Enable: m.enable, Start: m.start}}
 				return m, tea.Exec(op, func(err error) tea.Msg { return installedMsg{result: op.result, err: err} })
 			case "e":
 				content, err := m.config().Render(m.system)
@@ -458,11 +491,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						err = service.WriteNew(path, []byte(content))
 					}
 					if err == nil {
-						m.notice = "已导出 " + path
+						m.notice = m.tr("已导出 ") + path
 					}
 				}
 				if err != nil {
-					m.notice = err.Error()
+					m.notice = m.language.Error(err)
 				}
 				return m, nil
 			case " ", "enter":
@@ -525,15 +558,15 @@ func (m Model) resultContent() string {
 	r := m.result
 	var b strings.Builder
 	if r.err != nil {
-		b.WriteString(errorStyle.Render("操作未全部完成") + "\n\n" + r.err.Error() + "\n\n")
+		b.WriteString(errorStyle.Render(m.tr("操作未全部完成")) + "\n\n" + m.language.Error(r.err) + "\n\n")
 		if r.result.Written {
-			b.WriteString("服务文件已保留：" + r.result.Path + "\n请修复错误后使用下列命令检查或继续操作。\n")
+			b.WriteString(m.tr("服务文件已保留：") + r.result.Path + m.tr("\n请修复错误后使用下列命令检查或继续操作。\n"))
 		} else {
-			b.WriteString("尚未安装服务。按 b 返回修改。\n")
+			b.WriteString(m.tr("尚未安装服务。按 b 返回修改。\n"))
 		}
 	} else {
-		b.WriteString(activeStyle.Render("服务已创建") + "\n\n" + r.result.Path + "\n")
-		b.WriteString(fmt.Sprintf("自启：%t    已请求启动：%t\n", m.enable, m.start))
+		b.WriteString(activeStyle.Render(m.tr("服务已创建")) + "\n\n" + r.result.Path + "\n")
+		b.WriteString(fmt.Sprintf(m.tr("自启：%t    已请求启动：%t\n"), m.enable, m.start))
 	}
 	ctl, logs := "systemctl --user", "journalctl --user"
 	if m.system {
@@ -542,7 +575,7 @@ func (m Model) resultContent() string {
 	name := m.config().Filename()
 	b.WriteString("\n" + ctl + " status " + name + "\n" + logs + " -u " + name + " -f\n")
 	if !m.system {
-		b.WriteString("\n用户服务默认随用户会话运行。需要注销后运行时，可自行执行：\n  loginctl enable-linger \"$USER\"\n")
+		b.WriteString(m.tr("\n用户服务默认随用户会话运行。需要注销后运行时，可自行执行：\n  loginctl enable-linger \"$USER\"\n"))
 	}
 	return b.String()
 }
@@ -550,12 +583,13 @@ func (m Model) resultContent() string {
 // Bubble Tea releases the terminal while this command runs, so sudo can use
 // the real terminal without reading passwords into the application.
 type installProcess struct {
-	config  unit.Config
-	options service.Options
-	result  service.Result
-	stdin   io.Reader
-	stdout  io.Writer
-	stderr  io.Writer
+	language i18n.Language
+	config   unit.Config
+	options  service.Options
+	result   service.Result
+	stdin    io.Reader
+	stdout   io.Writer
+	stderr   io.Writer
 }
 
 func (p *installProcess) SetStdin(r io.Reader)  { p.stdin = r }
@@ -581,7 +615,7 @@ func (p *installProcess) Run() error {
 	var err error
 	p.result, err = service.Install(p.config, p.options, terminalRunner(p.stdin, p.stdout, p.stderr))
 	if err != nil {
-		fmt.Fprintln(p.stderr, err)
+		fmt.Fprintln(p.stderr, p.language.Error(err))
 	}
 	return err
 }
@@ -591,18 +625,18 @@ func (m Model) Summary() string {
 	if m.lastManaged != nil {
 		r := m.lastManaged
 		if r.err != nil {
-			return "操作未全部完成：" + r.err.Error() + "\n" + r.result.String()
+			return m.tr("操作未全部完成：") + m.language.Error(r.err) + "\n" + r.result.LocalizedString(m.language)
 		}
-		return r.result.String()
+		return r.result.LocalizedString(m.language)
 	}
 
 	if m.result == nil {
 		return ""
 	}
 	if m.result.err != nil {
-		return "操作未全部完成：" + m.result.err.Error()
+		return m.tr("操作未全部完成：") + m.language.Error(m.result.err)
 	}
-	return "已创建服务：" + m.result.result.Path
+	return m.tr("已创建服务：") + m.result.result.Path
 }
 
 func (m Model) Failed() bool {

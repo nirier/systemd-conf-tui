@@ -2,6 +2,7 @@ package unit
 
 import (
 	"fmt"
+	"github.com/nirier/systemd-conf-tui/internal/i18n"
 	"regexp"
 	"strings"
 	"unicode"
@@ -45,7 +46,7 @@ var managedNamePattern = regexp.MustCompile(`^(?:[A-Za-z0-9_:.-]|\\x[0-9A-Fa-f]{
 // ValidateName accepts literal systemd unit names, never paths or patterns.
 func ValidateName(name string) error {
 	if len(name) > 255 || !managedNamePattern.MatchString(name) {
-		return fmt.Errorf("无效的 unit 名称: %q", name)
+		return i18n.Errorf("无效的 unit 名称: %q", name)
 	}
 	return nil
 }
@@ -57,13 +58,13 @@ func (c Config) Filename() string {
 func (c Config) Validate(system bool) error {
 	name := strings.TrimSuffix(c.Name, ".service")
 	if !namePattern.MatchString(name) || len(c.Filename()) > 255 {
-		return fmt.Errorf("服务名只能包含英文字母、数字、_、-、.，且不能以 . 或 - 开头")
+		return i18n.Errorf("服务名只能包含英文字母、数字、_、-、.，且不能以 . 或 - 开头")
 	}
 	if strings.TrimSpace(c.ExecStart) == "" {
-		return fmt.Errorf("请输入启动命令，例如 /usr/bin/python3 /home/me/app.py")
+		return i18n.Errorf("请输入启动命令，例如 /usr/bin/python3 /home/me/app.py")
 	}
 	if !system && (c.User != "" || c.Group != "") {
-		return fmt.Errorf("用户模式不能设置 User / Group；清空这两个字段或按 F2 切换系统模式")
+		return i18n.Errorf("用户模式不能设置 User / Group；清空这两个字段或按 F2 切换系统模式")
 	}
 	for _, field := range []struct{ name, value string }{
 		{"Description", c.Description}, {"ExecStart", c.ExecStart},
@@ -76,17 +77,17 @@ func (c Config) Validate(system bool) error {
 		{"MemoryMax", c.MemoryMax}, {"CPUQuota", c.CPUQuota}, {"WantedBy", c.WantedBy},
 	} {
 		if strings.IndexFunc(field.value, unicode.IsControl) >= 0 || strings.HasSuffix(strings.TrimSpace(field.value), "\\") {
-			return fmt.Errorf("%s 不允许控制字符或末尾的续行反斜杠", field.name)
+			return i18n.Errorf("%s 不允许控制字符或末尾的续行反斜杠", field.name)
 		}
 	}
 	if c.Type != "" && !oneOf(c.Type, "simple", "exec", "forking", "oneshot", "dbus", "notify", "notify-reload", "idle") {
-		return fmt.Errorf("Type 请选择 simple / exec / forking / oneshot / dbus / notify / notify-reload / idle")
+		return i18n.Errorf("Type 请选择 simple / exec / forking / oneshot / dbus / notify / notify-reload / idle")
 	}
 	if c.Restart != "" && !oneOf(c.Restart, "no", "always", "on-success", "on-failure", "on-abnormal", "on-watchdog", "on-abort") {
-		return fmt.Errorf("Restart 请选择 no / always / on-success / on-failure / on-abnormal / on-watchdog / on-abort")
+		return i18n.Errorf("Restart 请选择 no / always / on-success / on-failure / on-abnormal / on-watchdog / on-abort")
 	}
 	if c.Type == "oneshot" && oneOf(c.Restart, "always", "on-success") {
-		return fmt.Errorf("oneshot 服务不能使用 Restart=always 或 on-success")
+		return i18n.Errorf("oneshot 服务不能使用 Restart=always 或 on-success")
 	}
 	return validateExtra(c.Extra)
 }
@@ -105,7 +106,7 @@ func validateExtra(extra string) error {
 	for i, line := range strings.Split(extra, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.IndexFunc(line, unicode.IsControl) >= 0 {
-			return fmt.Errorf("自定义指令第 %d 行包含控制字符", i+1)
+			return i18n.Errorf("自定义指令第 %d 行包含控制字符", i+1)
 		}
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
 			continue
@@ -116,7 +117,7 @@ func validateExtra(extra string) error {
 		}
 		key, _, ok := strings.Cut(line, "=")
 		if !section || !ok || !keyPattern.MatchString(strings.TrimSpace(key)) || strings.HasSuffix(line, "\\") {
-			return fmt.Errorf("自定义指令第 %d 行：请先写 [Unit] / [Service] / [Install]，随后每行写 Key=Value（不支持续行）", i+1)
+			return i18n.Errorf("自定义指令第 %d 行：请先写 [Unit] / [Service] / [Install]，随后每行写 Key=Value（不支持续行）", i+1)
 		}
 	}
 	return nil

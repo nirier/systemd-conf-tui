@@ -1,11 +1,11 @@
 package service
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/nirier/systemd-conf-tui/internal/i18n"
 	"github.com/nirier/systemd-conf-tui/internal/unit"
 )
 
@@ -32,7 +32,7 @@ func Directory(system bool) (string, error) {
 		return "", err
 	}
 	if !filepath.IsAbs(dir) {
-		return "", fmt.Errorf("XDG_CONFIG_HOME 必须是绝对路径")
+		return "", i18n.Errorf("XDG_CONFIG_HOME 必须是绝对路径")
 	}
 	return filepath.Join(dir, "systemd", "user"), nil
 }
@@ -59,7 +59,7 @@ func WriteNew(path string, data []byte) error {
 		return closeErr
 	}
 	if err = os.Link(f.Name(), path); err != nil {
-		return fmt.Errorf("无法创建 %s（已有文件不会覆盖）: %w", path, err)
+		return i18n.Errorf("无法创建 %s（已有文件不会覆盖）: %w", path, err)
 	}
 	return nil
 }
@@ -75,7 +75,7 @@ func Install(c unit.Config, opts Options, run Run) (result Result, err error) {
 	}
 	result.Path = filepath.Join(dir, c.Filename())
 	if _, statErr := os.Lstat(result.Path); statErr == nil {
-		return result, fmt.Errorf("%s 已存在；请更换服务名，已有服务不会覆盖", result.Path)
+		return result, i18n.Errorf("%s 已存在；请更换服务名，已有服务不会覆盖", result.Path)
 	} else if !os.IsNotExist(statErr) {
 		return result, statErr
 	}
@@ -93,7 +93,7 @@ func Install(c unit.Config, opts Options, run Run) (result Result, err error) {
 		verify = append([]string{"--user"}, verify...)
 	}
 	if _, err = run("systemd-analyze", verify...); err != nil {
-		return result, fmt.Errorf("unit 校验失败，尚未安装: %w", err)
+		return result, i18n.Errorf("unit 校验失败，尚未安装: %w", err)
 	}
 	if opts.System {
 		// Stage as root on the target filesystem, then link without replacement.
@@ -104,18 +104,18 @@ func Install(c unit.Config, opts Options, run Run) (result Result, err error) {
 		}
 		staged = strings.TrimSpace(staged)
 		if filepath.Dir(staged) != dir || !strings.HasPrefix(filepath.Base(staged), ".systemd-conf-tui-") {
-			return result, fmt.Errorf("sudo mktemp 返回了非预期路径")
+			return result, i18n.Errorf("sudo mktemp 返回了非预期路径")
 		}
 		defer func() {
 			if _, cleanupErr := run("sudo", "rm", "-f", "--", staged); cleanupErr != nil && err == nil {
-				err = fmt.Errorf("服务操作完成，但临时文件 %s 清理失败: %w", staged, cleanupErr)
+				err = i18n.Errorf("服务操作完成，但临时文件 %s 清理失败: %w", staged, cleanupErr)
 			}
 		}()
 		if _, err = run("sudo", "install", "-m", "0644", "--", source, staged); err != nil {
 			return result, err
 		}
 		if _, err = run("sudo", "ln", "-T", "--", staged, result.Path); err != nil {
-			return result, fmt.Errorf("安装失败（已有文件不会覆盖）: %w", err)
+			return result, i18n.Errorf("安装失败（已有文件不会覆盖）: %w", err)
 		}
 	} else {
 		if err = os.MkdirAll(dir, 0755); err != nil {
@@ -141,7 +141,7 @@ func Install(c unit.Config, opts Options, run Run) (result Result, err error) {
 			args = append([]string{"--user"}, args...)
 		}
 		if _, err = run(name, args...); err != nil {
-			return result, fmt.Errorf("文件已写入 %s，但 %s 失败；请根据错误修复后手动重试: %w", result.Path, strings.Join(args, " "), err)
+			return result, i18n.Errorf("文件已写入 %s，但 %s 失败；请根据错误修复后手动重试: %w", result.Path, strings.Join(args, " "), err)
 		}
 	}
 	return result, nil

@@ -1,6 +1,6 @@
 # systemd-conf-tui
 
-使用 **Go + Bubble Tea** 编写的中文终端界面，快速创建 systemd 服务，并管理当前用户或系统的所有类型 unit。采用类似 lazygit / jjui 的分栏布局与键盘操作：左侧配置，右侧实时预览，按 `Enter` 才进入编辑。默认创建当前用户的 `--user` 服务，可在界面中按 **F2** 切换到需要 sudo 的系统服务模式。
+使用 **Go + Bubble Tea** 编写的终端界面，支持中文和 English，快速创建 systemd 服务，并管理当前用户或系统的所有类型 unit。采用类似 lazygit / jjui 的分栏布局与键盘操作：左侧配置，右侧实时预览，按 `Enter` 才进入编辑。默认创建当前用户的 `--user` 服务，可在界面中按 **F2** 切换到需要 sudo 的系统服务模式。
 
 ## 开始使用
 
@@ -10,14 +10,14 @@
 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS.txt
-tar -xzf systemd-conf-tui_0.3.0_linux_amd64.tar.gz
+tar -xzf systemd-conf-tui_0.4.0_linux_amd64.tar.gz
 ./systemd-conf-tui
 ```
 
 ARM64 设备使用 `linux_arm64` 安装包。也可以使用 Go **1.25+** 安装：
 
 ```sh
-go install github.com/nirier/systemd-conf-tui@v0.3.0
+go install github.com/nirier/systemd-conf-tui@v0.4.0
 systemd-conf-tui
 ```
 
@@ -62,6 +62,7 @@ go run .
 | `F2` | 切换用户服务 / 系统服务，保留已填写内容 |
 | `F3` | 打开或收起高级配置，保留配置值 |
 | `F4` | 打开 unit 管理；管理页返回创建流程 |
+| `F5` | 打开语言设置，支持中文 / English |
 | 安装页 `j/k` + `Space` / `Enter` | 选择并切换自启 / 立即启动选项，`Tab` 切到预览滚动 |
 | 安装页 `i` / `e` | 安装 / 导出 |
 | `?` | 查看快捷键帮助，`?` / `Esc` 关闭 |
@@ -69,6 +70,18 @@ go run .
 | `q` / `Ctrl+C` | 退出；编辑时 `q` 作为普通文字，`Ctrl+C` 始终退出 |
 
 终端至少需要 48 列 × 20 行，推荐 120 列 × 30 行。96 列及以上使用左右分栏；窄终端使用单面板，按 `Tab` 查看实时预览。窄终端的安装页同时显示预览和安装选项。字段列表随选中项滚动，预览中的长行会折行，完整内容可滚动查看。
+
+## 界面语言
+
+默认使用中文。浏览创建界面、操作结果或管理列表时，按 **F5** 打开设置，用 `j/k` / 方向键选择 **中文** 或 **English**，按 `Enter` 保存并立即应用，按 `Esc` 取消。编辑、筛选、操作确认和操作执行期间不能打开设置。
+
+语言偏好保存在 `$XDG_CONFIG_HOME/systemd-conf-tui/config.json`，默认路径为 `~/.config/systemd-conf-tui/config.json`，下次启动自动沿用：
+
+```json
+{"language": "en"}
+```
+
+可选值为 `zh` 和 `en`。设置文件无效或无法读取时回退到中文并显示错误；保存失败时保留当前语言。语言设置覆盖 TUI 的创建、预览提示、帮助、管理和结果界面，不翻译用户填写的内容、unit 原文或外部命令输出。命令行帮助仍使用中文。
 
 ## 用户与系统模式
 
@@ -154,11 +167,13 @@ make build
 打包 Linux amd64 / arm64 发布文件并生成 SHA256 校验文件：
 
 ```sh
-make release VERSION=0.3.0
+make release VERSION=0.4.0
 ```
 
 ```text
 main.go                参数、JSON 生成入口和终端检测
+internal/config/       用户界面设置的读取和保存
+internal/i18n/         中文 / English 文案及错误翻译
 internal/unit/         unit 配置、校验和生成
 internal/service/      安装、unit 查询、依赖检查、安全删除和 systemctl 操作
 internal/tui/          Bubble Tea 模型、分栏视图、编辑器和 sudo 终端交接
